@@ -1,0 +1,21 @@
+                                      将扣图黑色边框抹白，需要首先检索到黑色边框扣图，然后再对扣图进行抹白
+需要抹白的黑色边框定义：线上(dell服务器上)扣图有黑色边框，但是pdf上扣图没有黑色边框的扣图
+
+需要对黑色边框抹白的扣图id检索：
+一、检索需要抹白的黑色边框思路：
+1. 找到线上包含黑色边框的扣图id列表(embed_black_edge_fold_id_list)
+2. 通过embed_black_edge_fold_id_list裁剪pdf上对应的扣图new_crop_fold
+3. 检索new_crop_fold包含黑色边框扣图id列表(crop_black_edge_fold_id_list)
+4. embed_black_edge_fold_id_list 减去 crop_black_edge_fold_id_list即得到目标扣图列表
+
+二、具体执行步骤：
+1.在dell在服务器上执行find_bold_edge_fold.py得到所有黑色边框扣图id对应的json文件
+2.在本地执行check_crop_fold_bold.py脚本，获取需要需要抹白的黑色扣图
+
+
+对黑色边框进行抹白：
+一、扣图抹白思路：
+将最左列框横坐标之外的及最右列框横坐标加列框宽度之外的黑色像素全部改为白色。
+
+二、执行步骤：
+执行fold_black_edge_clean.py

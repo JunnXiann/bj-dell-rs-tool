@@ -1,0 +1,37 @@
+tornado==5.0.2
+cdifflib==1.2.6
+fire~=0.5.0
+lxml
+oss2~=2.18.1
+glob2~=0.7
+pyyaml~=6.0
+pymongo~=4.3.3
+pyconvert
+opencv-python~=4.7.0.72
+torch~=2.0.0
+numpy~=1.24.3
+pandas~=2.0.0
+pynvml~=11.5.0
+hashids
+requests~=2.28.2
+elasticsearch==7.17.0
+pillow~=9.5.0
+
+PyMuPDF~=1.24.9
+openpyxl~=3.1.5
+
+# file_extract
+py7zr~=0.20.5
+rarfile~=4.2
+tqdm~=4.67.1
+pycdlib~=1.14.0
+
+# ai punc
+openai~=1.77.0
+redis~=3.5.3
+
+rapidfuzz~=3.13.0
+fonttools~=4.39.3
+httpx~=0.28.1
+pytest~=8.4.1
+

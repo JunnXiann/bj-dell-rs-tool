@@ -1,0 +1,6 @@
+[2025-09-26 17:14:25]GET http://localhost:9201/jsz-ik/_search [status:200 request:0.387s]
+[2025-09-26 17:14:25]GET http://localhost:9201/jsz-ik/_search [status:200 request:0.003s]
+[2025-09-26 17:14:26]GET http://localhost:9201/jsz-ik/_search [status:200 request:0.704s]
+[2025-09-26 17:14:26]GET http://localhost:9201/jsz-ik/_search [status:200 request:0.002s]
+[2025-09-26 17:14:26]GET http://localhost:9201/jsz-ik/_search [status:200 request:0.353s]
+[2025-09-26 17:14:26]GET http://localhost:9201/jsz-ik/_search [status:200 request:0.002s]

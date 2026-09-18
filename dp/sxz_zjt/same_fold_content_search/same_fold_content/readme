@@ -1,0 +1,15 @@
+查找重复扣图，造成重复扣图原因：
+1.技术原因造成重复
+2.底稿pdf本身有重复
+具体生成的excel在https://rushi-ai.feishu.cn/docx/GGFndQHmDoG0QCx50zscBASOnuv
+具体文件为“思溪藏扣内容重复统计.xlsx”
+
+注意：fold_pdf_pge_url.json因过大不便上传到git，因此仅包含单条样例。
+fold_pdf_pge_url.json生成过程：
+1.下载https://rushi-ai.feishu.cn/file/Hr9Pbre7xoUgVix1wuHcNUkhnee上面的Excel
+2.执行python3 read_excel.py
+
+执行步骤（在本地执行）：
+python3 find_same_fold_content.py
+python3 update_result.py
+python3 write_excel.py

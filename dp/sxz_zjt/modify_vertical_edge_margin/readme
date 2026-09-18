@@ -1,0 +1,6 @@
+调整扣图上下空白高度
+1.修改SX_FOLD_DIR为对应dell服务器扣图备份路径
+2.执行python3 modify_margin.py
+
+遗留问题：
+mongodb中sx_fold只对抽取的扣图添加了上下空白信息，裁剪的扣图没有添加。

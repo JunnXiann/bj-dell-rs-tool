@@ -1,0 +1,1139 @@
+#----------------------------------------------------------------------
+#【經文資訊】大正新脩大藏經 第 54 冊 No. 2134 唐梵文字
+#【版本記錄】發行日期：2025-04，最後更新：2025-02-03
+#【編輯說明】本資料庫由 財團法人佛教電子佛典基金會（CBETA）依「大正新脩大藏經」所編輯
+#【原始資料】蕭鎮國大德提供，北美某大德提供
+#【其他事項】本資料庫可自由免費流通，詳細內容請參閱【財團法人佛教電子佛典基金會資料庫版權宣告】
+#----------------------------------------------------------------------
+
+No. 2134
+唐梵文字一卷
+
+夫欲𭮧識兩國言音者。須是師資相乘。或是西國人亦須曉解悉曇童梵漢之語者。或是博學君子欲得作學漢梵之語者。悉曇文字五天音旨不出此途傅大瑜伽教千歲阿闍梨方傅流通此地並是中天音韻最密要文字出自聲明論本。但有學唐梵之語者。得此為首。餘語皆通。梵漢兩本同學習者。細用其心。一二年間即堪翻譯兩國言音字義同美。夫欲翻譯持念習瑜伽行者。先令精凍此文梵漢雙譯梵字漢字漢識梵言。梵呼漢字者或多或並有二合三合或單或䨱但看字母音韻具在別卷聲韻兩段理令諸家有元之教乃各題名目下量漢字智者鑒詳傅於後代。
+
+傅五部瑜伽持念教北平八力子全真集
+
+唐梵文字
+
+cina唐　brahma梵
+
+dvai兩　biṣayaṃ國
+
+vacanāṃ言　svara音
+
+lekhā文　akṣara字
+
+eka一　bidharaccha卷
+
+svarga天　pṛthibi地
+
+sūrya日　candra月
+
+cchāyā陰　ātapaḥ陽
+
+paripūrṇu圓　adeśa矩
+
+divāaḥ晝　rāttri夜
+
+ālokaḥ明　andhakaraḥ闇
+
+devagarjati雷　bimyu電
+
+vāyu風　varṣa雨
+
+tāraka星　srota流
+
+megha雲　bidanita散
+
+yati往　gata來
+
+āiśa去　raigṛhṇa取
+
+pūrva東　paśvima西
+
+dakṣiṇa南　uttara北
+
+upara上　heṣṭa下
+
+parasmara相　prativaddha輔
+
+svāmi君　mantri臣
+
+dāsa僕　dibīra使
+
+mahargha貴　samargha賤
+
+kumāra童　vala(（vālaubhra？）)竪
+
+niyata刊　śānta定
+
+parivartta品　dravya物
+
+abhiṣeka策　sthita立
+
+nagara州　svāmi主
+
+sarasvati辨　śikṣāca教
+
+niti禮　lekhaḥ書
+
+svāpita置　uru(（？）)設
+
+sahāṃga(（？）)衛　nigama府
+
+pitā父　mātā母
+
+jyeṣṭabhrāta兄　kanyasābhrāta弟
+
+śoka孝　artha讓
+
+vṛhata弘　prasāda撫
+
+bhāghinīya甥　sara舅
+
+pṛthak異　paridheṣi隣
+
+jyeṣṭa伯　pitṛya叔
+
+ekasthā同　mela聚
+
+praṇama奉　kāri事
+
+mitra友　makṣa朋
+
+vinī不　āvṛta懌
+
+daridra貪　adravya窶
+
+parvata山　aṃgaṇa庭
+
+ucchrapita軒　cchattra蓋
+
+śuci淨　aṭavī野
+
+puṣpa華　stambha柱
+
+puṣṭa美　sāmāpta景
+
+sahasra千　śarada秋
+
+kuśala嘉　saṃcāra傳
+
+prabheda萬　puraṇa古
+
+puruṣa男　strī女
+
+pratyāgamana迎　vivaha嫁
+
+hakkāra喚　jīvitaṃ命
+
+nimitta招　ākarṣa追
+
+kriṇa買　vikrīṇa賣
+
+haṭṭa市　prasāra店
+
+nikkala出　praviśa入
+
+gṛhī俗　karaṇīya緇
+
+saṃvyavahara交　java馳
+
+vaṇija商　bikrīṇā貨
+
+prasādika妍　durvarṇu醜
+
+valavahuḥ強　durvala羸
+
+pūrva先　prasāda蒙
+
+stoka少　phovani贈
+
+adya今　pratipūja酬
+
+guru重　hovaṇa(（？）)遺
+
+eka一　śrūta聞
+
+śilā砥　śaila礪
+
+puna再　saṃjñā想
+
+garhaṇa藏　nīti規
+
+sairava謹　śarīra身
+
+pardhva節　durbhikṣā儉
+
+vigatā離　iha此
+
+ata面　ko誰
+
+niṣṭa降　vara希
+
+virūpa惡　nirnṛta滅
+
+sarvakāla常　guruśraddhā敦
+
+puṇya福　svasthita綏
+
+pīṭa禍　yathā如
+
+pratiśavda響　pradyuttara應
+
+kuśala善　yathā若
+
+cchaya影　anupa(（？）)隨
+
+citrakarmma圖　nāma名
+
+muktā璀　śreṣṭamusala㻮
+
+kuṭa積　saṃskāra行
+
+guṇaja藏　śaddhāla蕤
+
+tathā如　guru欽
+
+bidaḥ叡　prajñā哲
+
+yathā猶　vaḍita裏
+
+śavda聲　āra錐
+
+yatkiṃci咸　mahā京
+
+gaurava遵　guṇa德
+
+kacchapa龜　udghāṭa啟
+
+devata神　śastā師
+
+vyākhyānaṃ講　patha道
+
+śastra論　maṃju妙
+
+āsphoṭa激　dyota揚
+
+byavahāra理　artha致
+
+akṣara文　āsthāyi參
+
+upurapara疊　talasi席
+
+prajñā聰　atikrāntā過
+
+dṛṣṭā閱　catvāra肆
+
+saṃpura(（？）)玉　racana砌
+
+mrera推　bhadra賢
+
+pāṣaṇa石　vāha渠
+
+bhaga(（？）)讓　anatikrama次
+
+vicāra撿　pratyakṣa驗
+
+hoti是　anyathā非
+
+pravijaya提　sama撕
+
+mūrkha愚　jñāna智
+
+kākali指　patita落
+
+prava㴟　puṣpa花
+
+śoka詩　niṣpanna成
+
+piḍa公　maryādā含
+
+surāga翠　kalāma筆
+
+a　na不　accha停
+
+roma毫　pada句
+
+nirupatrava寧　parivartta易
+
+akṣara字　abhiprāya意
+
+saṃketa在　rija忠
+
+spraṣṭa有　pratiṣedha弗
+
+api尚　mithyā邪
+
+prosāka(（？）)媚　kevala獨
+
+praviveka暢　gambhīra幽
+
+satva情　avanata偏
+
+ākarṣa抽　praśnika雅
+
+cinta思　kuśala善
+
+sayaho(（？）)戒　keṭṭa(（？）)成
+
+jana仁　nadya縱
+
+citta心　ma匪
+
+bhājana器　bhāga寸
+
+cihna標　mā勿
+
+jñāgupsā(（？）)嫌　kharkhaṭa固
+
+duṣkara難　saṃmanta周
+
+saṃpanna備　sapta七
+
+krama步　vak辭
+
+dūra遠　trīṇi三
+
+saṃkṣepa略　duravabodhati玄
+
+guhya秘　tulya衝
+
+śraddhā信　sthita在
+
+jana人　abhiprasaṃna誠
+
+nātavao(（？）)未　sravati淪
+
+patita墮　katvavāra兵
+
+śastra戎　setu偃
+
+śula戟　yodha武
+
+kṣatrīya帝　agetabhū(（？）)騰
+
+jyeti輝　riddhi(（？）)通
+
+rathya衢　dhāva走
+
+sthānaśāla驛　grantha結
+
+kṣuṇṇavarmma陌　pariveṣṭa縈
+
+dhvaja旗　nava九
+
+nadya江　hakṣa(（？）)躍
+
+pakṣa羽　catvāra四
+
+samudra海　darśaya星
+
+tejanāṃ威　tāṃmra銅
+
+gṛhavaṃga梁　cchitṛ截
+
+prapāta險　khaṅga劍
+
+dhavalaghara閣　prayojana要
+
+ṭāvajya(（？）)機　bhalla將
+
+avaskanda謀　vidhavī[(宋-木+?)/(冗-几+力)]
+
+vināśa敗　anta臨
+
+ddhanddha敵　kadāci慮
+
+parama徵　jaya勝
+
+kaṅja懷　mahā大
+
+bhaya懼　dadāmi錐
+
+svalpa劣　mā莫
+
+paribhava欺　matsya魚
+
+vitarka麗　kevala並
+
+krama進　krauṅca鶴
+
+phalganapakṣa翼　yugala雙
+
+utayati飛　rukta赤
+
+cinta心　jāla罔
+
+kavaṭa詐　pītalaṃ黃
+
+udbheda泉　aṃguṣṭa損
+
+pratyeka期　adi元
+
+prathama首　tuṣṭa忻
+
+utsāha効　dāya賞
+
+sthānaṃ職　anutnata靡
+
+vicikitsā疑　vāhu肢
+
+ūrū肱　yatna竭
+
+dṛḍha操　sakhaya佐
+
+paricāraka弼　deva天
+
+sopānāṃ基　svāmi君
+
+mantrī臣　gaurava道
+
+acaśa合　adhakā宜
+
+ramaṇi保　maṃtrī神
+
+daetao姿　caṇakātalāra(（？）)米
+
+aṭṭakaṇika麵　idhara柴
+
+aṃgara炭　pucya養
+
+jāta生　hota是
+
+āśṛta託　ghṛta蘇
+
+taila油　ṣaṇi石
+
+mākṣika蜜　lavaṇa鹽
+
+śukta醋　tīvalā羹
+
+drava臛　maṇḍa餅
+
+phala菓　modaya喜
+
+latuka團　guḍa糖
+
+ikṣu蔗　āsvāda噉
+
+carva嚼　sādrarka薑
+
+tumbhuruphala椒　rarthī芥
+
+piṇḍala末　paca煮
+
+pakka熟　anumāna斟
+
+darviuttola酌　gau恭
+
+rava謹　apekṣa敬
+
+dhara持　phela(（？）)盤
+
+pātra盂　sṝtisana箸
+
+sakāra着　pheḍa却
+
+veśa坐　aghila小
+
+khaṭṭa床　granthi返
+
+vandha沽　vastra衣
+
+koṇa角　bhuṃja喰
+
+samapta蘿　saṃcāra遷
+
+sthāna位　danta齒
+
+kāṣṭa木　kaṃkada梳
+
+dhova濯　gāva牛
+
+śakṛgī冀　pralepa塗
+
+puṃcchida拭　śoca洗
+
+prakṣalita條　kalāci匙
+
+caṅṭu𣏐　koṣṭika倉
+
+gaṃja庫　randhanaśala厨
+
+śalamaṇḍapi廳　ṭhavasukha安
+
+saṃcaya堵　sthālī釜
+
+kaṭṭaha鑵　ṭuri(（？）)刀
+
+adātrāṃ(（？）)鎗　ghaṭa盆
+
+kudbha瓮　kuṭārī斧
+
+śūrpa箕　rajju繩
+
+varatraṃ素　atikrama違
+
+viloma拒　rājaśāsana勅
+
+ekeka條　rajakula官
+
+adhikaraṇa司　graha執
+
+bandha縳　parimāla養
+
+śarīra身　janīhi知
+
+manda患　sahāya逐
+
+śānti靜　vana林
+
+tanu薄　gramana專
+
+caryā崇　svabhūmi社
+
+prabhūta多　saṃpraṣa遣
+
+eta斯　sīvana村
+
+lagna着　vasanta春
+
+hala耕　vāvi種
+
+vavaḥ植　āheṭā𭻁
+
+kṣetra畒　samāra營
+
+kṛṣi農　udghāṭa決
+
+puṣkaraṇī油　avatāra降
+
+varbha(（？）)澤　hala梨
+
+mathi攚　dāna施
+
+śyamaddhā(（？）)功　sālasya嬾
+
+katvāvāra夫　sūryodaya晨
+
+śayati霖　umyukta勒
+
+satyuruṣa土　rātrī霄
+
+udita興　mastrāka鞭
+
+lakuṭa伏　śakaśa東
+
+yuga轝　khara驢
+
+bhāra馱　aśva馬
+
+yāna乘　phala排
+
+śakti槊　dhanuṣi弓
+
+kāṇḍa箭　śatru逆
+
+aḍaloma順　bhaga分寸
+
+dhyānya稻　tila麻
+
+sasya豆　godhūma麥
+
+śalaka籌　māva量
+
+daśaāphaka斛　prastha升
+
+gaṇanta數　gaṇana計
+
+gaṇita算　bhaṅga布
+
+paṭṭa絹　ristāhakta(（？）)尺
+
+hasta肘　sthiya(（？）)手
+
+bhṛtaka雇　ārgha價
+
+āśraya依　vidasti度
+
+pratyaya憑　sūtraṃ(（？）)縷
+
+sūcī針　sūtraṃ綖
+
+kagha裁　sīva縫
+
+vīthī街　gīti吟
+
+bīdhiraccha巷　nāda吼
+
+ruṣṭa嗔　hasita㗛
+
+maṅgalya吉　amaṅgalya凶
+
+cchinda絕　śikhara嶺
+
+nava新　aṃkura芝
+
+ākāśa碧　空
+
+pīḍa危　kuṃja巒
+
+purāṇa舊　kesara蘂
+
+kusudbhavarṇa江　udghāḍa鮮
+
+vaddhana帶　pathya宜
+
+ākarṣa攀　bhagga折
+
+sāmanya共　āsarbha鄙
+
+kṣetraṃ田　ghara家
+
+pītāmahā翁　ārāma園
+
+riṣi仙　vṛkṣa樹
+
+mṛga鹿　udyāna苑
+
+rāja王　koṭṭa城
+
+gṛha舍　ṭāṅga梨
+
+syāṃ之　viṣaya國
+
+kalpa劫　anumāna比
+
+callani羅　koṭṭa(（？）)城
+
+parivartta廻　avaloka觀
+
+prīti戀　anya別
+
+pakāra報　ākaṃkṣa望
+
+prasāda恩　jāta生
+
+kukkuṭa鷄　śikhara峯
+
+antarvāna隱　asthika骨
+
+nāga龍　cchidra穴
+
+adṛśya潛　saṃsthāna形
+
+dhyāna禪　nadī河
+
+pānīyaṃ水　gambhīra濬
+
+śīla戒　girimūrva巘
+
+saila巖　svaccha清
+
+kuvja俯　karuṇa悲
+
+raja塵　sīmā𭻃
+
+maitrī慈　patāka和
+
+sadā求　kampa振
+
+prajñā惠　ūlka炬
+
+dīrgha長　prabha榮
+
+aḍalagna扶　sīmasanvi關
+
+ṣaṭ六　gati趣
+
+udghāḍa開　dhephita(（？）)圍
+
+daśa十　andhakāra冥
+
+apanaya袪　bheta除
+
+śītajvara虐　biṣa毒
+
+hastanakṣatra軫　kṣanti忍
+
+kṛṣṇa黔　śapa𬻼
+
+gandha虗　kūṭi堂
+
+vyūha嚴　pratimā像
+
+lekha書　likha寫
+
+śreṣṭa尊　sūtra經
+
+buddha佛　dharmma法
+
+sthāna處　sārya(（？）)位
+
+saṃgha僧佉　gaurava道
+
+jvala明　tatkāla當
+
+prakrama修　vyavasthā軌
+
+śakaṭapatha轍　phokka至
+
+nirvāṇa涅　槃
+
+nagara城　kāṣaya袈
+
+裟　karaka瓶
+
+prātra鉢　śayana臥
+
+asana貝　vastra衣
+
+parhyaṇa裳　prāṇaka蟲
+
+mūṣaka鼠　trasta恐
+
+carvati却　dhauvana院
+
+soṣaṇa灑　prasāra舒
+
+bikasa張　varṇakamvala𭯪
+
+毹　pṛṅga綾
+
+citra錦　sūcikarmma繡
+
+savarṇu鏗　śavya鏘
+
+lajja恥　nāsti無
+
+jugupsā嫌　kastorī麝
+
+dhūma香　stotra讚
+
+stavādi詠　gāyi歌
+
+tūri管　nṛtya舞
+
+bheri鼓　sughoṣaka笙
+
+vīna篁　śikṣa學
+
+paṇḍinya問　vipula博
+
+jūta弄　vrahma梵
+
+svara音　cchoṭika彈
+
+jihva舌　siddhāṃ悉
+
+曇　mara莫
+
+bismara忌　praṇidhāna願
+
+eta慈　labha利
+
+prasveda潤　samanta普
+
+uṇḍka(（？）)洽　nāsti無
+
+sīmā彊　tavā旦
+
+aṅga題　aṣṭa八
+
+śata百　anya余
+
+samanā皆　nipuṇa審
+
+pratyavekṣa詳　kṣaṇika聊
+
+śarīraprakāśaḥ申　śikṣā學
+
+bhāṣa語　iccha欲
+
+yaśa𮩿　lekha天
+
+likhaḥ章　hetu因
+
+karmma業　bipākapratyuvāca報
+
+āśṛta託　pratibimba形
+
+mātu母　garbha腹
+
+a無　bidyā明
+
+prabha(（？）)發　saṃ(（？）)行
+
+svarā(（？）)試　syāṃ之
+
+vihāna(（？）)起　ktaśaulā(（？）)催
+
+nāma名　rūpa色
+
+evaṃ是　asti有
+
+ṣaḍa六　yatana處
+
+gati奚　udghāḍa開
+
+dṛṣṭa見　jāta生
+
+vyakta雖　tuṣṭa喜
+
+vṛddha老　mṛta死
+
+nivartta還　rudana哀
+
+udvega憂　karuṇi悲
+
+pūrvaanādi始　gata去
+
+duḥkha苦　kleśa惱
+
+anta終　savaṭasatvā廻
+
+tathā如　gata來
+
+mahā大　ārya聖
+
+tikkala出　dṛṣṭa見
+
+ekikā布　viṣayaṃ國
+
+parivartta轉　maṃju好
+
+dharmma為　cakra輪
+
+ati極　etatū斯
+
+sama沈　juṃjji溺
+
+anati始　nacya從
+
+mṛga鹿　udyānāṃ苑
+
+kuśanagara俱　尸
+
+那　uttara北
+
+maṃṣṭa所　prakā演
+
+vrahma梵　（a）kṣara文
+
+ṣya數　nāsti無
+
+datidra窮　ati極
+
+daśa十　daśa捨
+
+stāte為　śata百
+
+daśa十　śata百
+
+cabhdra曰　sahasra千
+
+daśa十　sahasra千
+
+stāte為　atikra萬
+
+daśa拾　ayuta萬
+
+cabhdra曰　lakṣa億
+
+daśa十　atitalakṣa億
+
+ati為　samaptā京
+
+koṭi兆　sarva諸
+
+bhodvo反　prati載
+
+dharmma法　samudra海
+
+pā波　raṇa瀾
+
+iccha欲　adya令
+
+sarva一　切
+
+bhalā離　duḥkha苦
+
+raṇa皆　ṭhaya安
+
+mantra真言　sātva密
+
+suarya教　tyegu遇
+
+syāṃ之　gaṃbhīra甚
+
+āsti希　ma有
+
+śraddha信　buddha佛
+
+putra子　citukārmma京
+
+vidānāṃ授　tajñālā當
+
+bhūri觀　prabhā發
+
+bodhi菩　提
+
+āphipra意　pratiśa入
+
+ṣihi灌　cavaṃ頂
+
+dabhāsu壇　vastu依
+
+śreṣṭa尊　laiśa取
+
+canacṛ則　siddhi悉
+
+地　caśā能
+
+ṭhaṃya于　bhūrī想
+
+śreṣṭa尊　sarva遍
+
+dhātu照　dīdanā鏡
+
+dṛṣṭa現　vīṣaya水
+
+dṛma雲　niya甚
+
+pegha深　śaṃbhī密
+
+gṛṃbhi藏　dharmma法
+
+pathā道　rāja王
+
+svāmi君　sṛmida嚴
+
+jaya勝　vajra金剛
+
+bhaya身　svā青
+
+tṛṃ不　kaṃtpa動
+
+jñāna去　daṃṣṭra牙
+
+prabhā發　jāta生
+
+vasanta春　tathā如
+
+devagarjana雷　nāda吼
+
+vajra金剛　maṇi寶
+
+saārya教　tyesaṃca溥
+
+maitrī慈　suva弉
+
+raṇaṃ勸　tathā如
+
+gata來　abhiṣiṃca灌
+
+uṣṇīṣa頂　jñāna去
+
+agni火　masana珠
+
+avana明　dharmma法
+
+ttāya性　vajra金剛
+
+bhūri觀　śikṣā察
+
+jñāna智　mastu母
+
+tiṣṭa起　catu四
+
+rgadya量　cittā心
+
+savara轉　cikra輪
+
+capra能　pergadya久
+
+karmma羯磨　mahā大
+
+jvala明　latva尅
+
+sidvī成　praśa眾
+
+phala〔sū〕果　ratta樂
+
+savattā周　duravadhe玄
+
+dhāmaḥ英　majja隨
+
+smara念　adu具
+
+āsana成　niṣpanā海
+
+sama會　dramaṃ曼
+
+ḍho荼　ārya聖
+
+vatā者　mahā大
+
+sūrya日　catvāra四
+
+buddhā佛　dhe◇波
+
+lla砢　daśa十
+
+ṣaṭ六　bodhi菩
+
+satva薩　dākā內
+
+pamā外　rave供
+
+vasudya養　catu四
+
+kāṣa攝　phoṣa自
+
+labha利　sārya聖
+
+buddha佛　bhadra賢
+
+sārya聖　bhadra賢
+
+kalpa劫　jana人
+
+maitrī慈　mami我
+
+mira已　traya三
+
+karmma業　taḥyaṃ救
+
+tāna世　ācārya闍
+
+梨　ekāśrāma傳
+
+dharmma法　tyāṃ方
+
+śruvi便　bhūta真
+
+tṛ不　naca思
+
+nitti議　papra重
+
+jata悲　caḥ作
+
+rakṣa謨　mo穆
+
+khā佉　mahā大
+
+śikṣa師　mo最
+
+śāṃ勝　yaga瑜
+
+伽　ṣṭaṃna持
+
+jvala明　stu制
+
+pati底　āśra依
+
+yadi於　mahā大
+
+śikṣa教　maṃ曼
+
+ṇḍa荼　satvā密
+
+urghaṭ啟　stāte為
+
+phota利　yojī末
+
+vyava世　stāna軌
+
+cani議　sarasvatinitistuḍa宗
+
+ṣava讚　stavādi詠
+
+sarva諸　ārya聖
+
+sāṃ近　masa曆
+
+triṇi三　bhadra賢
+
+tuma次　dhiṣṭa修
+
+daśavi拾　sārya聖
+
+prama歡　dita喜
+
+vi離　mala垢
+
+prabhakari發　pachaśa光
+
+jvala明　dīṃ成
+
+ārvi焰　sma（bhī）惠
+
+duḥ難　jaya勝
+
+acīkha現　mukha前
+
+pūraṅgama達　udghāta行
+
+a不　cara動
+
+sādhu善　mahu惠
+
+mati法　śrātā雲
+
+krama次　samyak正
+
+su妙　buddha覺
+
+tathā如　gatāya來
+
+ḍhistu稱　mahā大
+
+timi應　ṣaya鏡
+
+trimi三　dhātu界
+
+śaṃme最　śreṣṭa尊
+
+daśavi十　tyāṃ方
+
+maḥ莫　saṃmasa並
+
+sadhivaṃ擁　evaṃ是
+
+samubhava化　jattā方
+
+jattatatta生　padrā于
+
+iha此　samapta境
+
+valo號　candra月
+
+muṇi牟尼　nāda吼
+
+vahara李　kṛlamutu推
+
+ārya聖　nadyakā從
+
+ṭatāma何　gaurava道
+
+tagata來　taṅga總
+
+naṣṭana持　stātote為
+
+kāṭhā逕　ā依
+
+tyo教　yoya奉
+
+sthāya行　kkā至
+
+cītna心　uṣṇīṣa頂
+
+stute禮
+
+gaṇanaekasahasraekaśataśatidaśaviāṣṭakṣara
+
+師傳五部瑜伽教北平吉詳子全真記
+
+eka(一)dvīi(二)triṇi(三)catvāri(四)pace(五)cha(六)sapta(七)aṣṭa(八)nava(九)daśa(十)puṣyā(十一)magha(十二)viśā(廿)śatā(百)sahāsrā(千)rakṣa(万)rpaguṇa(正月)cetra(二月)dheśaka(三月)jiṣṭa(四月)
+

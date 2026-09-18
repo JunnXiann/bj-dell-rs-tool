@@ -1,0 +1,99 @@
+#!/bin/bash
+
+# 默认参数
+LOCAL_PORT=29019
+REMOTE_PORT=27017
+HOST_ALIAS=""
+MODE=""
+
+print_help() {
+    echo "用法: $0 [open|close] -h <host_alias> [-l <local_port>] [-r <remote_port>]"
+    echo ""
+    echo "参数说明:"
+    echo "  open           启动 SSH 隧道"
+    echo "  close          关闭 SSH 隧道"
+    echo "  -h <host>      使用 ~/.ssh/config 中的主机别名"
+    echo "  -l <port>      本地端口，默认 29019"
+    echo "  -r <port>      远程端口，默认 27017"
+    echo "  -help          显示帮助"
+    echo ""
+    echo "示例:"
+    echo "  $0 open -h rs-dell"
+    echo "  $0 close -h rs-dell"
+    echo "  $0 open -h rs-dell -l 12345 -r 27017"
+}
+
+# 参数解析
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        open|close)
+            MODE="$1"
+            shift
+            ;;
+        -h)
+            HOST_ALIAS="$2"
+            shift 2
+            ;;
+        -l)
+            LOCAL_PORT="$2"
+            shift 2
+            ;;
+        -r)
+            REMOTE_PORT="$2"
+            shift 2
+            ;;
+        -help|-h|-?)
+            print_help
+            exit 0
+            ;;
+        *)
+            echo "未知参数: $1"
+            print_help
+            exit 1
+            ;;
+    esac
+done
+
+# 检查必要参数
+if [[ -z "$MODE" || -z "$HOST_ALIAS" ]]; then
+    echo "错误: 必须指定操作模式(open/close)和主机别名(-h)"
+    echo ""
+    print_help
+    exit 1
+fi
+
+# 获取本地绑定状态
+TUNNEL_CMD="ssh -fN -L localhost:${LOCAL_PORT}:localhost:${REMOTE_PORT} ${HOST_ALIAS}"
+echo $TUNNEL_CMD
+# 存放pid进程号
+PID_DIR="$HOME/.pids"
+if [ ! -d "$PID_DIR" ]; then
+    mkdir -p "$PID_DIR"
+fi
+PID_FILE="$PID_DIR/ssh_tunnel_${LOCAL_PORT}_${HOST_ALIAS}_${REMOTE_PORT}.pid"
+
+if [[ "$MODE" == "open" ]]; then
+    echo "启动 SSH 隧道: 本地端口 $LOCAL_PORT → $HOST_ALIAS:$REMOTE_PORT"
+    $TUNNEL_CMD
+    PID=$(pgrep -f "ssh -fN -L localhost:$LOCAL_PORT:localhost:$REMOTE_PORT $HOST_ALIAS")
+    echo $PID
+    if [[ -n "$PID" ]]; then
+        echo "$PID" > "$PID_FILE"
+        echo "隧道已建立，进程 PID: $PID"
+    else
+        echo "未能建立隧道，请检查 ssh 配置。"
+    fi
+
+elif [[ "$MODE" == "close" ]]; then
+    if [[ -f "$PID_FILE" ]]; then
+        PID=$(cat "$PID_FILE")
+        if kill "$PID" > /dev/null 2>&1; then
+            echo "关闭 SSH 隧道，PID $PID"
+            rm -f "$PID_FILE"
+        else
+            echo "找不到运行中的隧道进程，可能已关闭。"
+        fi
+    else
+        echo "未找到 PID 文件，无法关闭隧道。"
+    fi
+fi

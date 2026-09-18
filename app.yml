@@ -1,0 +1,88 @@
+# MongoDB：阅藏平台-正式环境-只读账号
+mongodb-tr-prod-readonly:
+  name: tripitaka-reader-prod
+  port: 27017
+  host: 47.93.211.15
+  user: readonly_prod_share
+  password: P!9MZR8kQ2X7
+  # user: write_prod_system
+  # password: A9fK2!mQ7RzP
+
+# MongoDB：阅藏平台-测试环境-只读账号
+mongodb-tr-test-readonly:
+  name: tripitaka-reader-lytest
+  port: 27017
+  host: localhost
+  user: readonly_test_share
+  password: R7PZ9!Q2KMX8
+  # user: write_test_system
+  # password: '!7PZ9RQM28KX'
+
+# MongoDB：阅藏平台-预发布环境-只读账号
+mongodb-tr-pre-readonly:
+  name: tripitaka-reader-pre
+  port: 27017
+  host: localhost
+  user: readonly_pre_share
+  password: 9RZ!P7KQM28X
+  # user: write_pre_system
+  # password: RZ!M9KQ82P7X
+
+# MongoDB：校对平台-正式环境-只读账号
+mongodb-tw-prod-readonly:
+  name: tripitaka-product
+  port: 27017
+  host: localhost
+  # user: readonly_prod_share
+  # password: R9Z!P7Q2KMX8
+  user: write_prod_system
+  password: R!PZ97Q2KMX8
+
+# MongoDB：校对平台-预发布环境-只读账号
+mongodb-tw-pre-readonly:
+  name: tripitaka-pre
+  port: 28018
+  host: localhost
+  user: readonly_pre_share
+  password: Z7P!9RQ2KMX8
+
+# MongoDB：校对平台-测试环境-只读账号
+mongodb-tw-test-readonly:
+  name: tripitaka-dev
+  port: 27017
+  host: localhost
+  # user: readonly_test_share
+  # password: RZ9P7Q2KMX8
+  user: write_test_system
+  password: ZP9R7Q2KMX8
+
+# MongoDB：校对平台-练习环境-只读账号
+mongodb-tw-lab-readonly:
+  name: tripitaka-dev
+  port: 29019
+  host: localhost
+  user: readonly_lab_share
+  password: RZ9P7Q2GMX8
+
+mongodb-tw-aux:
+  name: tripitaka-aux
+  port: 27017
+  host: localhost
+  user: readonly_aux_share
+  password: AUX3Cf7kQ2X!w
+
+esearch:
+  host: localhost
+  port: 9201
+
+mongodb-tw-cowork:
+  name: tripitaka-cowork
+  port: 27017
+  host: localhost
+  user: write_cowork_system
+  password: COWk1AtDG!z
+
+
+# OSS
+img:
+  hash_salt: smjs@2018!@#$%^&*() # 图片后缀盐值

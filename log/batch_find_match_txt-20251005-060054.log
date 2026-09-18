@@ -1,0 +1,4 @@
+[2025-10-05 06:00:55]GET http://localhost:9201/cbeta-ik/_search [status:200 request:0.261s]
+[2025-10-05 06:00:55]GET http://localhost:9201/cbeta-ik/_search [status:200 request:0.611s]
+[2025-10-05 06:00:56]GET http://localhost:9201/cbeta-ik/_search [status:200 request:0.564s]
+[2025-10-05 06:00:57]GET http://localhost:9201/cbeta-ik/_search [status:200 request:0.555s]

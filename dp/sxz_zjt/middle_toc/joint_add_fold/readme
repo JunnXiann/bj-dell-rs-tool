@@ -1,0 +1,7 @@
+从dell服务器上得到已加宽的扣图，通过扣图的文件名得到对应的扣图id列表
+
+1.执行shell命令得到所有已加宽扣图路径
+find /nas/data/T/原始藏经资料/07思溪藏SX/思溪藏_扬州古籍_JPG/new/joint_add -type f -name "*.jpg" >> joint_add.txt
+sed -i 's|/nas/data/T/原始藏经资料/07思溪藏SX/思溪藏_扬州古籍_JPG/new/joint_add/||g' joint_add.txt
+
+2.执行python3 write_joint_add_fold_id_list.py得到joint_add_fold_id_list.json文件

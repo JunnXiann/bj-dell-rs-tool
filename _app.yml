@@ -1,0 +1,21 @@
+# MongoDB
+mongodb:
+  name: tripitaka
+  port: 27017
+  host: 127.0.0.1
+  user:
+
+# ElasticSearch
+esearch:
+  host: localhost
+  port: 9200
+
+# OSS
+oss:
+  url: https://tripitakas-img.oss-cn-beijing.aliyuncs.com
+  key_id:
+  key_secret:
+
+# OSS
+img:
+  hash_salt:

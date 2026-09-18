@@ -1,0 +1,7 @@
+根据扣内容完全相同并不能找到所有重复的扣图，因为ocr对相同扣图每次识别出来的内容可能不相同，因此这里根据相似度比对，然后交由校对部人工找出相同扣图。
+具体生成的excel在https://rushi-ai.feishu.cn/docx/GGFndQHmDoG0QCx50zscBASOnuv 生成的最终文件为“思溪藏相似扣内容图统计_内嵌扣图.xlsx”。
+
+执行步骤（在本地执行）
+python3 find_similar_fold_content.py
+python3 update_similar_result.py
+python3 write_excel_similar_result.py
