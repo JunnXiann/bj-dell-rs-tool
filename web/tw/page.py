@@ -835,10 +835,12 @@ def check_and_export(out_path='./log/page_issues.csv', batch_size=500, group_siz
     print(f'Issues logged to: {out_path}')
 
 
-def apply_txt2missingchars(db, page, index_id='fz_yinshi_match', field='cmp_txt'):
+def apply_txt2missingchars(db, page, index_id='fz_yinshi_match', field='cmp_txt', chars=None):
     """
     Finds a specific match_log and fills missing character fields
     without overwriting existing valid text.
+    chars: optional list of char dicts (in reading order, taken from page['chars']) to align against
+    instead of all non-center chars, so only that subset (e.g. yinshi chars) is filled.
     """
     # 1. Find the target log
     target_log = next((log for log in page.get('match_logs', []) if log.get('index_id') == index_id), None)
@@ -850,14 +852,15 @@ def apply_txt2missingchars(db, page, index_id='fz_yinshi_match', field='cmp_txt'
     match_txt = target_log['match_txt']
 
     # 2. Get active characters (excluding center columns)
-    cen_column_ids = [
-        c.get('column_id') for c in page.get('columns', []) if c.get('is_center') and not c.get('deleted')
-    ]
-    chars = [
-        ch
-        for ch in page.get('chars')
-        if not ch.get('deleted') and ch['char_id'].rsplit('c', 1)[0] not in cen_column_ids
-    ]
+    if chars is None:
+        cen_column_ids = [
+            c.get('column_id') for c in page.get('columns', []) if c.get('is_center') and not c.get('deleted')
+        ]
+        chars = [
+            ch
+            for ch in page.get('chars')
+            if not ch.get('deleted') and ch['char_id'].rsplit('c', 1)[0] not in cen_column_ids
+        ]
 
     # 3. Rebuild base_txt to match the chars array (exclude center columns)
     rebuilt_base_txt = ''
