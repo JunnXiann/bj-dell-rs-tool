@@ -8,7 +8,7 @@
 
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
     python match_yinshi.py preview [--sutra=FZ0002] [--direction=fz2sx|sx2fz] [--db=...]   # 只读，出报告；不填sutra=全部经
-    python match_yinshi.py flag_e --value=20260921111 [--field=flag1] [--reel_regex=^SX] [--keep_existing] [--commit]   # 给所有含E格式的页打标记
+    python match_yinshi.py flag_e --value=20260921111 [--field=flag1] [--reel_regex=^SX] [--keep_existing] [--not_flag3_date=20260921] [--commit]   # 给所有含E格式的页打标记
     python match_yinshi.py plan  [--with_counts]
     python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit [--flag_date=20260921]] [--force] [--set_page_match]
     python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--overwrite] [--commit [--flag_date=20260921]]
@@ -1053,18 +1053,23 @@ def find_e_pages(db, reel_regex=''):
     return _with_retry(scan)
 
 
-def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex='', keep_existing=False, commit=False,
-               report_dir=REPORT_DIR):
+def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex='', keep_existing=False, not_flag3_date=None,
+               commit=False, report_dir=REPORT_DIR):
     """ 给库里所有含E(音释)格式的页打标记，不限于对照表里的经，也不需要匹配。默认只预演，加--commit才写库。
     value：写入的值，如--value=20260921111；field：写入的字段，默认flag1
     reel_regex：只看卷编码符合它的卷，如--reel_regex=^SX(默认全部)
     keep_existing：页上该字段已有别的值时不改（不加则覆盖）。flag1在别的脚本里也用作批次标记和查询条件，
     覆盖前先看预演报告里的prev_flag，或加keep_existing
-    输出flag_e-<时间>.csv：每页一行(页名、有E格式的卷、原来的值、处理结果)
+    not_flag3_date：日期YYYYMMDD。跳过flag3是该日期000-005(match/apply按整页状态打的标记)的页，只标记其余的页，
+    即E页里这次没被匹配处理到的页，如match和apply跑完后--value=20260921112 --not_flag3_date=20260921
+    输出flag_e-<时间>.csv：每页一行(页名、有E格式的卷、该字段和flag3原来的值、处理结果)
     """
     import helper as hlp
     hlp.set_logging('match_yinshi')
     value = int(str(value).strip())
+    touched = None  # match/apply标记过的flag3范围：日期000-005
+    if not_flag3_date not in (None, ''):
+        touched = (flag_date_prefix(not_flag3_date) * 1000, flag_date_prefix(not_flag3_date) * 1000 + 5)
     dbh = hlp.get_db(db)
     epages = find_e_pages(dbh, reel_regex)
     names = sorted(epages, key=hlp.align_code)
@@ -1074,14 +1079,18 @@ def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex='', keep_
     rows, before = [], {}
     for i in range(0, len(names), 500):
         chunk = names[i:i + 500]
-        found = {d['name']: d for d in _with_retry(lambda: list(dbh.page.find({'name': {'$in': chunk}}, {'name': 1, field: 1})))}
+        found = {d['name']: d for d in _with_retry(
+            lambda: list(dbh.page.find({'name': {'$in': chunk}}, {'name': 1, field: 1, 'flag3': 1})))}
         todo = []
         for name in chunk:
             doc = found.get(name)
             prev = doc.get(field) if doc else None
             has_prev = prev not in (None, '')
+            flag3 = doc.get('flag3') if doc else None
             if not doc:
                 action = 'no_page'
+            elif touched and isinstance(flag3, int) and touched[0] <= flag3 <= touched[1]:
+                action = 'skipped_touched'  # match/apply已经处理过这页
             elif prev == value:
                 action = 'already_set'
             elif has_prev and keep_existing:
@@ -1092,11 +1101,11 @@ def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex='', keep_
                 if has_prev:
                     before[prev] = before.get(prev, 0) + 1
             rows.append({'page': name, 'reels': ','.join(epages[name]), 'prev_flag': '' if prev is None else prev,
-                         'action': action})
+                         'flag3': '' if flag3 is None else flag3, 'action': action})
         if commit and todo:
             _with_retry(lambda: dbh.page.update_many({'name': {'$in': todo}}, {'$set': {field: value}}))
     now = datetime.now().strftime('%Y%m%d-%H%M%S')
-    write_csv(path.join(report_dir, 'flag_e-%s.csv' % now), rows, ['page', 'reels', 'prev_flag', 'action'])
+    write_csv(path.join(report_dir, 'flag_e-%s.csv' % now), rows, ['page', 'reels', 'prev_flag', 'flag3', 'action'])
     count = {}
     for r in rows:
         count[r['action']] = count.get(r['action'], 0) + 1

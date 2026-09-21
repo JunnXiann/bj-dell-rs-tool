@@ -444,14 +444,14 @@ def flag_e_fixture():
     return reels, pages
 
 
-def run_flag_e_on_fake(monkeypatch_db, **kw):
+def run_flag_e_on_fake(monkeypatch_db, value=20260921111, **kw):
     import helper
     saved = helper.get_db, helper.set_logging
     helper.get_db, helper.set_logging = (lambda db_id: monkeypatch_db), (lambda *a, **k: None)
     try:
         import tempfile
         with tempfile.TemporaryDirectory() as d:
-            my.run_flag_e(value=20260921111, report_dir=d, **kw)
+            my.run_flag_e(value=value, report_dir=d, **kw)
             import csv, glob
             return list(csv.DictReader(open(glob.glob(d + '/flag_e-*.csv')[0], encoding='utf-8-sig')))
     finally:
@@ -480,3 +480,28 @@ def test_flag_e_commit_overwrites_or_keeps_existing_and_can_filter_reels():
     rows = run_flag_e_on_fake(db, commit=True, reel_regex='^SX')  # 只看SX的卷
     assert {r['page'] for r in rows} == {'SX_1_10_78', 'SX_1_10_80'}
     assert db.page_docs[3]['flag1'] == 20260921111 and db.page_docs[0]['flag1'] == 20260921111
+
+
+def test_flag_e_not_flag3_date_marks_only_the_pages_match_and_apply_did_not_touch():
+    reels, pages = flag_e_fixture()
+    for p in pages:
+        if p['name'] == 'SX_1_10_78':
+            p['flag3'] = 20260921003  # 今天match/apply处理过(整页状态3)
+        if p['name'] == 'SX_1_10_80':
+            p['flag3'] = 2606260924  # 别的批次的标记，不在今天的000-005里
+    db = FlagFakeDb(reels, pages)
+    rows = {r['page']: r for r in run_flag_e_on_fake(db, value=20260921112, commit=True, not_flag3_date='20260921')}
+    assert rows['SX_1_10_78']['action'] == 'skipped_touched' and rows['SX_1_10_78']['flag3'] == '20260921003'
+    assert rows['SX_1_10_80']['action'] == 'written' and rows['FZ_2_1_2']['action'] == 'written'
+    assert [p.get('flag1') for p in db.page_docs] == [91220251, None, 20260921112, 20260921112]  # 被跳过的页flag1不动
+    assert db.page_docs[2]['flag3'] == 2606260924  # 不改flag3
+    # 日期范围的边界：000和005算处理过，006和昨天的不算
+    reels, pages = flag_e_fixture()
+    pages[0]['flag3'], pages[2]['flag3'], pages[3]['flag3'] = 20260921000, 20260921005, 20260921006
+    rows = {r['page']: r['action'] for r in run_flag_e_on_fake(FlagFakeDb(reels, pages), value=1, not_flag3_date=20260921)}
+    assert rows['SX_1_10_78'] == rows['SX_1_10_80'] == 'skipped_touched' and rows['FZ_2_1_2'] == 'dry_run'
+    try:
+        run_flag_e_on_fake(FlagFakeDb(*flag_e_fixture()), value=1, not_flag3_date='2026-09-21')
+        assert False
+    except ValueError:
+        pass
