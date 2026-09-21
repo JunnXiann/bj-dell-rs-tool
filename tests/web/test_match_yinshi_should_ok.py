@@ -157,3 +157,25 @@ def test_render_page_view_marks_differences_per_column():
     lines = my.render_page_view(page, {'idx': ids}, {}, cmp_by_idx)
     assert lines == ['b1c1  txt: 潜昨塩反', '      cmp: 潛昨𥂁反', '           ＾　＾　',
                      'b1c2  txt: 天字', '      cmp: ■■', '           ＾＾']
+
+
+REF = '替上六中反詎音巨\n鬼反笇筭字鄔波上\n減反區區丘俱反庸\n第二卷不出字\n第五卷不出字\n'
+
+
+def test_find_short_match_exact_and_across_lines():
+    assert my.find_short_match('鬼反笇筭字', REF) == '鬼反笇筭字'
+    # 匹配文本跨列时保留换行，字数(去掉换行)与被查找文本一致
+    m = my.find_short_match('波上減反區區', REF)
+    assert m == '波上\n減反區區'
+    assert len(m.replace('\n', '')) == len('波上減反區區')
+
+
+def test_find_short_match_tolerates_a_wrong_char():
+    assert my.find_short_match('減反區■丘俱反庸', REF) == '減反區區丘俱反庸'
+
+
+def test_find_short_match_rejects_ambiguous_and_missing():
+    assert my.find_short_match('卷不出字', REF) == ''  # 出现两次，无法判断是哪一处
+    assert my.find_short_match('鑿鑿鑿鑿鑿鑿', REF) == ''  # 没有相似的文本
+    assert my.find_short_match('', REF) == ''
+    assert my.find_short_match('足够长的文本却比参考还长', '短') == ''

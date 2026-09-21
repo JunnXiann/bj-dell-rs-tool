@@ -36,7 +36,10 @@ DIRECTIONS = {
     'sx2fz': {'target': 'SX', 'reference': 'FZ', 'index_id': 'fz_yinshi_scoped'},
 }
 EMPTY_REEL_TYPES = ('空卷', '音释（缺）')
-MIN_TXT_LEN = 10  # 音释文本少于该字数时不查找
+# find_best_match要求至少10字的连续同文才算匹配，更短的音释改用find_short_match
+SHORT_TXT_LEN = 30  # 页音释字数不超过该值才启用
+SHORT_MIN_SCORE = 80  # 最佳位置的相似度(0-100)至少达到该值
+SHORT_MIN_GAP = 10  # 最佳位置比其它位置至少高出该值，重复出现的文本(如“第N卷不出字”)因此不匹配
 Z_REEL_RE = re.compile(r'^([A-Z]+\d+)_(\d+)z(\d+)$')
 TITLE_RE = re.compile(r'經卷第[一二三四五六七八九十百千〇零]+重?$')  # 如“放光般若波羅蜜經卷第十二重”
 
@@ -387,6 +390,25 @@ def run_plan(db='tw-test-readonly', direction='fz2sx', with_counts=False, mappin
     logging.info('windows=%s jobs(%s)=%s reconcile issues=%s' % (len(windows), direction, len(jobs), len(recon)))
 
 
+def find_short_match(base_txt, ref_txt):
+    """ 在参考文本里为很短的音释找匹配文本；找不到或有多处同样好的位置时返回''
+    逐字滑动窗口(窗口长度=base字数)比较，最佳位置须足够像，且明显好于不重叠的其它位置
+    """
+    from rapidfuzz import fuzz
+    base = base_txt.replace('\n', '')
+    pos = [i for i, c in enumerate(ref_txt) if c != '\n']  # 去掉换行后各字在ref_txt里的位置
+    ref = ''.join(ref_txt[i] for i in pos)
+    n = len(base)
+    if not n or len(ref) < n:
+        return ''
+    scores = [fuzz.ratio(base, ref[i:i + n]) for i in range(len(ref) - n + 1)]
+    best = max(range(len(scores)), key=scores.__getitem__)
+    rival = max([s for i, s in enumerate(scores) if abs(i - best) >= n] or [0])
+    if scores[best] < SHORT_MIN_SCORE or scores[best] - rival < SHORT_MIN_GAP:
+        return ''
+    return ref_txt[pos[best]:pos[best + n - 1] + 1]
+
+
 def _own_log(page, index_id):
     return next((l for l in page.get('match_logs') or [] if l.get('index_id') == index_id), None)
 
@@ -402,20 +424,25 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
     page = t['page']
     base_txt, ordered = page_text(page, t['idx'], vdict)
     row = {'job': job_id, 'page': name, 'method': ','.join(sorted(t['methods'])), 'n_chars': len(ordered)}
-    if len(ordered) < MIN_TXT_LEN:
-        return dict(row, action='skipped_short'), None
+    if not ordered:  # 短的音释也要匹配，只有完全没字时才无可查找
+        return dict(row, action='skipped_empty'), None
     own = _own_log(page, index_id)
     if own and own.get('status') == 5 and not force:
         return dict(row, action='skipped_done', status=5), None
     try:
-        info = get_match_info(base_txt, find_best_match(base_txt, ref_txt)[0])
+        match_txt, by = find_best_match(base_txt, ref_txt)[0], 'find_best_match'
+        if not match_txt.strip() and len(ordered) <= SHORT_TXT_LEN:
+            match_txt, by = find_short_match(base_txt, ref_txt), 'short'
+        info = get_match_info(base_txt, match_txt)
     except Exception as e:  # 单页出错不影响整批
         logging.exception('%s failed' % name)
         return dict(row, action='error', note=str(e)), None
     log = dict(info, index_id=index_id, created_by='operator', create_time=datetime.now(),
-               reference_reels=reference_reels, method=row['method'])
+               reference_reels=reference_reels, method=row['method'], found_by=by)
     row.update(status=info['status'], r_hit2base=info['r_hit2base'], r_similar2hit=info['r_similar2hit'],
                r_similar2base=info['r_similar2base'], len_match_txt=info['len_match_txt'])
+    if by == 'short':
+        row['note'] = 'short text search'
     return row, log
 
 
@@ -582,6 +609,8 @@ def run_preview(sutra, direction='fz2sx', db='tw-test-readonly', min_status=3, m
             stats[log['status']] = stats.get(log['status'], 0) + 1
             row['match_txt'] = log['match_txt'].replace('\n', '/')
             head += ' | status=%s hit2base=%s similar2hit=%s' % (log['status'], log['r_hit2base'], log['r_similar2hit'])
+            if log.get('found_by') == 'short':
+                head += ' [short text search]'
             status, ordered, proxies = _fill_cmp(page, t, index_id, vdict, log=log, min_status=min_status)
             if status != 'ok':
                 row['action'] = 'not_applied (%s)' % status
