@@ -3,8 +3,8 @@
 思路：用两张对照表把每个福州藏音释卷(z卷)限定到含有对应音释的思溪藏卷("窗口")，只在窗口内做匹配，
 而不是在全部思溪藏音释文本里大海捞针。两个方向共用同一套窗口/取字/匹配逻辑：
 
-    fz2sx(默认)  福州藏音释字获得cmp_txt，参考文本来自思溪藏窗口内各卷的音释(E格式)
-    sx2fz        思溪藏音释字(E格式)获得cmp_txt，参考文本来自福州藏z卷的音释
+    fz2sx        福州藏音释字获得cmp_txt，参考文本来自思溪藏窗口内各卷的音释(E格式)
+    sx2fz(默认)  思溪藏音释字(E格式)获得cmp_txt，参考文本来自福州藏z卷的音释
 
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
     python match_yinshi.py preview [--sutra=FZ0002] [--direction=fz2sx|sx2fz] [--db=...]   # 只读，出报告；不填sutra=全部经
@@ -36,6 +36,7 @@ DIRECTIONS = {
     'fz2sx': {'target': 'FZ', 'reference': 'SX', 'index_id': 'sx_yinshi_scoped'},
     'sx2fz': {'target': 'SX', 'reference': 'FZ', 'index_id': 'fz_yinshi_scoped'},
 }
+DEFAULT_DIRECTION = 'sx2fz'
 EMPTY_REEL_TYPES = ('空卷', '音释（缺）')
 # find_best_match要求至少10字的连续同文才算匹配，更短的音释改用find_short_match
 SHORT_TXT_LEN = 30  # 页音释字数不超过该值才启用
@@ -381,7 +382,7 @@ def _span(codes):
     return ', '.join(codes)
 
 
-def run_plan(db='tw-test-readonly', direction='fz2sx', with_counts=False, mapping=MAPPING_XLSX,
+def run_plan(db='tw-test-readonly', direction=DEFAULT_DIRECTION, with_counts=False, mapping=MAPPING_XLSX,
              yinshi_list=YINSHI_XLSX, report_dir=REPORT_DIR):
     """ 核对库并输出窗口(windows)与对不上的情况(reconcile)两个csv；with_counts会统计思溪藏窗口内的音释字数(较慢)"""
     import helper as hlp
@@ -581,7 +582,7 @@ def _cmp_changes(page, ordered, proxies):
             if p.get('cmp_txt') and p['cmp_txt'] != page['chars'][i].get('cmp_txt')}
 
 
-def run_match(direction='fz2sx', db='tw-test-readonly', only='', commit=False, force=False, set_page_match=False,
+def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commit=False, force=False, set_page_match=False,
               mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
     """ 在窗口内为目标页查找参考文本，写入match_logs（index_id见DIRECTIONS）。
     默认预演不写库；已有完全匹配(status=5)的页跳过，force可重跑；
@@ -630,7 +631,7 @@ def run_match(direction='fz2sx', db='tw-test-readonly', only='', commit=False, f
     logging.info('status distribution (2 no match .. 5 exact): %s' % dict(sorted(stats.items())))
 
 
-def run_apply(direction='fz2sx', db='tw-test-readonly', only='', min_status=3, commit=False, overwrite=False,
+def run_apply(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', min_status=3, commit=False, overwrite=False,
               mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
     """ 把match_logs里状态>=min_status的匹配文本填入目标音释字的cmp_txt
     默认只填空缺或■的字，不覆盖已有内容；overwrite=True时按最新的匹配文本重填这些音释字，已有的cmp_txt会被改写
@@ -693,7 +694,7 @@ def _sutra_line(r):
                 r['pct_same']))
 
 
-def run_preview(sutra='', direction='fz2sx', db='tw-test-readonly', min_status=3, detail=True, overwrite=False,
+def run_preview(sutra='', direction=DEFAULT_DIRECTION, db='tw-test-readonly', min_status=3, detail=True, overwrite=False,
                 mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
     """ 试跑并出报告，全程只读库：在内存里完成match和apply，没有任何写库的代码路径。
     sutra: 福州藏经号，如 FZ0002 或 FZ0002,FZ0003（两个方向都用福州藏经号）；不填=所有有音释卷的经
@@ -764,7 +765,7 @@ def run_preview(sutra='', direction='fz2sx', db='tw-test-readonly', min_status=3
         write_outputs()
 
 
-def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats, direction='fz2sx', overwrite=False):
+def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats, direction=DEFAULT_DIRECTION, overwrite=False):
     """ 试跑一个任务：逐页匹配并在内存里填cmp_txt，结果追加到out(详细行)、rows(页级报告行)、stats(状态分布)"""
     ref_txt, ref_counts, spans = build_reference_txt(dbh, job['reference_reels'], vdict)
     targets, target_counts = collect_yinshi(dbh, job['target_reels'], vdict)
