@@ -42,6 +42,9 @@ EMPTY_REEL_TYPES = ('空卷', '音释（缺）')
 SHORT_TXT_LEN = 30  # 页音释字数不超过该值才启用
 SHORT_MIN_SCORE = 80  # 最佳位置的相似度(0-100)至少达到该值
 SHORT_MIN_GAP = 10  # 最佳位置比其它位置至少高出该值，重复出现的文本(如“第N卷不出字”)因此不匹配
+# 首次匹配只认顺序一致的最长一段；同一页里两块文字前后颠倒时，另一块会被留下，因此再单独找一次
+LEFTOVER_MIN_LEN = 10  # 连续没有对应文本的字数不少于该值才单独再找
+LEFTOVER_MAX_RUNS = 8  # 每页最多补找几段
 Z_REEL_RE = re.compile(r'^([A-Z]+\d+)_(\d+)z(\d+)$')
 TITLE_RE = re.compile(r'經卷第[一二三四五六七八九十百千〇零]+重?$')  # 如“放光般若波羅蜜經卷第十二重”
 
@@ -63,6 +66,7 @@ def build_yinshi_windows(mapping_rows, existing_z):
     windows, skipped = {}, []
     pending = {}  # 经号 -> 上个z卷之后收集到的[(福州藏卷, 思溪藏卷)]
     last = {}  # 经号 -> (锚点卷序号, 上个窗口的行)，用于同一卷后的z1/z2共用窗口
+    shared = {}  # (经号, 锚点卷序号) -> [共用同一窗口的z卷]，以及它们各自在表里的思溪藏音释卷
     for fz, sx in mapping_rows:
         sutra = fz.split('_')[0]
         m = Z_REEL_RE.match(fz)
@@ -77,10 +81,18 @@ def build_yinshi_windows(mapping_rows, existing_z):
             rows = last[sutra][1]
         last[sutra] = (m.group(2), rows)
         pending[sutra] = []
-        sx_reels = [b for _, b in rows if b]
-        if sx:  # 思溪藏自己也有音释卷(z1)
-            sx_reels.append(sx)
-        windows[fz] = {'fz_reels': [a for a, _ in rows], 'sx_reels': sx_reels, 'reel_type': existing_z[fz]}
+        windows[fz] = {'fz_reels': [a for a, _ in rows], 'sx_reels': [b for _, b in rows if b],
+                       'reel_type': existing_z[fz]}
+        group = shared.setdefault((sutra, m.group(2)), {'zs': [], 'own_sx': []})
+        group['zs'].append(fz)
+        if sx and sx not in group['own_sx']:  # 思溪藏自己也有音释卷(z1)
+            group['own_sx'].append(sx)
+    # 共用窗口的z1/z2必须有相同的思溪藏卷：表里通常只有z1行带思溪藏音释卷，z2行是空的，
+    # 不统一的话两个z卷会各成一个任务，同一批思溪藏页被匹配两次，后一次的结果覆盖前一次
+    for group in shared.values():
+        for z in group['zs']:
+            base = windows[z]['sx_reels']
+            windows[z]['sx_reels'] = base + [o for o in group['own_sx'] if o not in base]
     return windows, skipped
 
 
@@ -472,10 +484,10 @@ def _source_fields(hit):
 
 
 REPORT_FIELDS = ['sutra', 'job', 'reference', 'page', 'method', 'n_chars', 'status', 'r_hit2base', 'r_similar2hit',
-                 'r_similar2base', 'len_match_txt', 'found_by', 'source_reels', 'source_pages', 'source_note',
+                 'r_similar2base', 'len_match_txt', 'found_by', 'leftover_chars', 'source_reels', 'source_pages', 'source_note',
                  'applied', 'n_same', 'n_placeholder', 'n_diff', 'action', 'note', 'target_txt', 'match_txt']
 SUMMARY_FIELDS = ['sutra', 'jobs', 'empty_jobs', 'reference', 'pages', 'status_5', 'status_4', 'status_3', 'status_2',
-                  'no_status', 'avg_hit2base', 'avg_similar2hit', 'chars', 'same', 'placeholder', 'diff', 'pct_same',
+                  'no_status', 'leftover_pages', 'avg_hit2base', 'avg_similar2hit', 'chars', 'same', 'placeholder', 'diff', 'pct_same',
                   'review_pages']
 
 
@@ -508,6 +520,7 @@ def summarize_sutras(rows):
             'status_3': sum(1 for r in with_status if r['status'] == 3),
             'status_2': sum(1 for r in with_status if r['status'] == 2),
             'no_status': len([r for r in rs if r.get('page') and not r.get('status')]),
+            'leftover_pages': sum(1 for r in rs if r.get('leftover_chars')),
             'avg_hit2base': round(sum(r['r_hit2base'] for r in rated) / n, 3) if n else '',
             'avg_similar2hit': round(sum(r['r_similar2hit'] or 0 for r in rated) / n, 3) if n else '',
             'chars': sum(r.get('n_chars') or 0 for r in rs),
@@ -516,6 +529,60 @@ def summarize_sutras(rows):
             'review_pages': ','.join(r['page'] for r in rs if r.get('page') and (r.get('status') or 0) < 3),
         })
     return out
+
+
+def leftover_segments(cmps):
+    """ 把按阅读顺序的cmp_txt列表切成连续的段：[(是否没有对应文本, 起, 止)]；空或■表示没有对应文本"""
+    segs = []
+    for i, c in enumerate(cmps):
+        missing = not c or c == '■'
+        if segs and segs[-1][0] == missing:
+            segs[-1][2] = i + 1
+        else:
+            segs.append([missing, i, i + 1])
+    return [tuple(x) for x in segs]
+
+
+def assemble_match_txt(cmps, segments, rescued):
+    """ 按目标字的顺序拼出新的匹配文本：有对应文本的段用已对上的cmp_txt，补找到的段(rescued: {段序号: 文本})用新找到的，
+    仍然没有对应文本的段略去（应用时它们仍是■）"""
+    parts = []
+    for n, (missing, a, b) in enumerate(segments):
+        if not missing:
+            parts.append(''.join(cmps[a:b]))
+        elif n in rescued:
+            parts.append(rescued[n])
+    return '\n'.join(parts)
+
+
+def rescue_leftovers(page, t, vdict, index_id, first_match, ref_txt):
+    """ 首次匹配后，把连续没有对应文本的目标字再单独到参考文本里找一次，处理同一页两块文字前后顺序颠倒的情况
+    返回(新匹配文本, 补找到的字数, [补找到的文本])；没有补找到时原样返回(first_match, 0, [])
+    """
+    from util.find_match import find_best_match
+    from web.tw.match import get_match_info
+    status, _, proxies = _fill_cmp(page, t, index_id, vdict, min_status=0, overwrite=True,
+                                   log={'index_id': index_id, 'match_txt': first_match, 'status': 5})
+    if status != 'ok':
+        return first_match, 0, []
+    cmps = [p.get('cmp_txt') for p in proxies]
+    segments = leftover_segments(cmps)
+    rescued, found, tried = {}, [], 0
+    for n, (missing, a, b) in enumerate(segments):
+        if not missing or b - a < LEFTOVER_MIN_LEN or tried >= LEFTOVER_MAX_RUNS:
+            continue
+        tried += 1
+        run_txt = ''.join(p['txt'] for p in proxies[a:b])
+        m2 = find_best_match(run_txt, ref_txt)[0].strip('\n')
+        if not m2 or m2 in first_match:  # 没找到，或找到的就是已经用过的那段
+            continue
+        if get_match_info(run_txt, m2)['status'] < 3:
+            continue
+        rescued[n] = m2
+        found.append(m2)
+    if not rescued:
+        return first_match, 0, []
+    return assemble_match_txt(cmps, segments, rescued), sum(b - a for n, (_, a, b) in enumerate(segments) if n in rescued), found
 
 
 def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, force=False, spans=None):
@@ -537,6 +604,11 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
         match_txt, by = find_best_match(base_txt, ref_txt)[0], 'find_best_match'
         if not match_txt.strip() and len(ordered) <= SHORT_TXT_LEN:
             match_txt, by = find_short_match(base_txt, ref_txt), 'short'
+        pieces, leftover = [match_txt], 0  # pieces：匹配文本由参考文本里哪几段拼成，用于查来源页
+        if by == 'find_best_match' and match_txt.strip():
+            new_txt, leftover, found = rescue_leftovers(page, t, vdict, index_id, match_txt, ref_txt)
+            if leftover:
+                match_txt, pieces = new_txt, pieces + found
         info = get_match_info(base_txt, match_txt)
     except Exception as e:  # 单页出错不影响整批
         logging.exception('%s failed' % name)
@@ -548,10 +620,18 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
     if by == 'short':
         row['note'] = 'short text search'
     row['found_by'] = by
+    if leftover:
+        row.update(leftover_chars=leftover, note='leftover pass: +%s chars' % leftover)
+        log['leftover_chars'] = leftover
     if spans is not None:
-        hit, note = locate_source(ref_txt, spans, log['match_txt'])
-        row.update(_source_fields(hit), source_note=note)
-        log.update(_source_fields(hit))
+        hits, notes = [], []
+        for piece in pieces:
+            h, n = locate_source(ref_txt, spans, piece)
+            hits += [x for x in h if x not in hits]
+            if n and n not in notes:
+                notes.append(n)
+        row.update(_source_fields(hits), source_note='; '.join(notes))
+        log.update(_source_fields(hits))
     return row, log
 
 
@@ -799,6 +879,8 @@ def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats
         head += ' | status=%s hit2base=%s similar2hit=%s' % (log['status'], log['r_hit2base'], log['r_similar2hit'])
         if log.get('found_by') == 'short':
             head += ' [short text search]'
+        if log.get('leftover_chars'):
+            head += ' [leftover pass +%s chars]' % log['leftover_chars']
         head += (' | matched %s: %s' % (row['source_reels'], row['source_pages'])
                  if row.get('source_reels') else ' | no source located')
         status, ordered, proxies = _fill_cmp(page, t, index_id, vdict, log=log, min_status=min_status, overwrite=overwrite)

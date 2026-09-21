@@ -237,3 +237,18 @@ def test_cmp_changes_only_reports_real_new_values():
     proxies = [{'cmp_txt': '潜'}, {'cmp_txt': '昨'}, {'cmp_txt': '■'}, {'cmp_txt': None}]
     # 新值与原值相同的不算；新值为空的不会清掉已有内容
     assert my._cmp_changes(page, ordered, proxies) == {0: '潜', 1: '昨', 2: '■'}
+
+
+def test_z1_z2_share_the_sx_yinshi_reel_listed_on_only_one_of_them():
+    # 表里只有z1行带思溪藏自己的音释卷；z2必须也用它，否则sx2fz会把同一批思溪藏页分成两个任务重复匹配
+    rows = [('FZ0033_001x1', 'SX0027_001x1'), ('FZ0033_001', 'SX0027_001'),
+            ('FZ0033_001z1', 'SX0027_001z1'), ('FZ0033_001z2', None)]
+    windows, _ = my.build_yinshi_windows(rows, {'FZ0033_001z1': '音释', 'FZ0033_001z2': '音释'})
+    sx = ['SX0027_001x1', 'SX0027_001', 'SX0027_001z1']
+    assert windows['FZ0033_001z1']['sx_reels'] == sx and windows['FZ0033_001z2']['sx_reels'] == sx
+    jobs = my.build_jobs(windows, 'sx2fz')
+    assert len(jobs) == 1 and jobs[0]['target_reels'] == sx
+    assert jobs[0]['reference_reels'] == ['FZ0033_001z1', 'FZ0033_001z2']
+    # 只有z1存在于库里时不受影响
+    windows, _ = my.build_yinshi_windows(rows, {'FZ0033_001z1': '音释'})
+    assert windows['FZ0033_001z1']['sx_reels'] == sx
