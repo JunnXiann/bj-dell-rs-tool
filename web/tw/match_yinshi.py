@@ -9,8 +9,8 @@
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
     python match_yinshi.py preview [--sutra=FZ0002] [--direction=fz2sx|sx2fz] [--db=...]   # 只读，出报告；不填sutra=全部经
     python match_yinshi.py plan  [--with_counts]
-    python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit [--flag=21092026001]] [--force] [--set_page_match]
-    python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--overwrite] [--commit [--flag=21092026001]]
+    python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit [--flag_date=20260921]] [--force] [--set_page_match]
+    python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--overwrite] [--commit [--flag_date=20260921]]
 
 两个xlsx被.gitignore忽略，需手工拷到本目录：福州藏vs思溪藏卷编码.xlsx、福州藏音释卷编码.xlsx
 """
@@ -285,34 +285,20 @@ def load_existing_z_reels(db):
     return {r['reel_code']: r.get('reel_type') for r in db.reel.find(cond, {'reel_code': 1, 'reel_type': 1})}
 
 
-FLAG_FIELD = 'flag3'  # 页数据里标记“这批改了哪些页”的字段；match.py等批量脚本也用它，值如151225001、20260206002
+FLAG_FIELD = 'flag3'  # 页数据里标记“这次改了哪些页”的字段；match.py等批量脚本也用它，值如151225001、20260206002
 
 
-def make_run_flag(day, used_max=None):
-    """ 批次标记：日月年(DDMMYYYY)加3位序号，如2026年9月21日第1批是21092026001。
-    used_max是库里当天已有的最大标记，新标记在它上面加1。日期开头的0不保留(2026年9月1日是1092026001)，不会与其它日期混淆"""
-    lo = int(day.strftime('%d%m%Y')) * 1000
-    seq = (used_max - lo if used_max and lo < used_max <= lo + 999 else 0) + 1
-    if seq > 999:
-        raise ValueError('more than 999 batches on %s' % day.strftime('%Y-%m-%d'))
-    return lo + seq
+def flag_date_prefix(flag_date=None):
+    """ 标记的日期部分(YYYYMMDD)：不指定就用今天。日期写错时报错"""
+    text = str(flag_date).strip() if flag_date not in (None, '') else datetime.now().strftime('%Y%m%d')
+    datetime.strptime(text, '%Y%m%d')
+    return int(text)
 
 
-def resolve_run_flag(db, flag, commit):
-    """ 写库时用的批次标记：没指定就按今天日期在库里取下一个序号；指定了就用指定的(库里已有页用过时提醒，
-    接着做中断的批次时重复使用是正常的)。预演(不写库)不需要，返回None"""
-    if not commit:
-        return None
-    if flag not in (None, ''):
-        flag = int(str(flag).strip())
-        if _with_retry(lambda: db.page.find_one({FLAG_FIELD: flag}, {'_id': 1})):
-            logging.warning('%s=%s is already on some pages (fine if this resumes an interrupted run)' % (FLAG_FIELD, flag))
-        return flag
-    now = datetime.now()
-    lo = int(now.strftime('%d%m%Y')) * 1000
-    top = _with_retry(lambda: list(db.page.find({FLAG_FIELD: {'$gte': lo + 1, '$lte': lo + 999}}, {FLAG_FIELD: 1})
-                                   .sort(FLAG_FIELD, -1).limit(1)))
-    return make_run_flag(now, top[0][FLAG_FIELD] if top else None)
+def status_flag(date_prefix, status_after):
+    """ 给改过的页打的标记：日期加3位状态码，如20260921004。状态码是补上音释比对文本后重新算出的整页匹配状态(0-5)，
+    整页原来没有匹配的页也一样，按现在算出的状态归类。返回整数，与其它脚本的flag3一致"""
+    return date_prefix * 1000 + (2 if status_after in (None, '') else int(status_after))
 
 
 def _with_retry(fn, tries=3):
@@ -663,7 +649,8 @@ def page_match_change(page, index_id, log, applied):
     这些字算作没匹配上，拉低整页状态。音释字得到福州藏的比对文本后，把这些字的命中数加到整页原有的命中数上，
     按平台自己的规则(get_status)重新算状态，再和原有的最好一条比，取更好的。
     index_id：本工具写入的日志id，计算“之前”时不算这一条。log：本页音释的匹配日志。applied：这条日志会不会被填入cmp_txt，
-    没填就等于没变化。假设整页原有的命中里不含音释字，命中数以整页字数封顶。
+    没填就等于没变化，但整页原来完全没有匹配的页例外：音释匹配是它现在唯一的匹配，照样按它重新算状态。
+    假设整页原有的命中里不含音释字，命中数以整页字数封顶。
     返回PAGE_MATCH_FIELDS里的字段
     """
     from web.tw.match import get_best_match, get_status
@@ -680,7 +667,7 @@ def page_match_change(page, index_id, log, applied):
     before = {'status': prev.get('status'), 'r_hit2base': prev.get('r_hit2base'),
               'r_similar2base': prev.get('r_similar2base')}
     after = before
-    if applied and base_len:
+    if (applied or prev.get('status') is None) and base_len:
         hit = min(base_len, count(prev, 'len_hit', 'r_hit2base') + (log.get('len_hit') or 0))
         similar = min(hit, count(prev, 'len_similar', 'r_similar2base') + (log.get('len_similar') or 0))
         r_hit, r_sim2base = round(hit / base_len, 3), round(similar / base_len, 3)
@@ -785,12 +772,13 @@ def _cmp_changes(page, ordered, proxies):
 
 
 def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commit=False, force=False, set_page_match=False,
-              min_status=3, flag=None, mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
+              min_status=3, flag_date=None, mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
     """ 在窗口内为目标页查找参考文本，写入match_logs（index_id见DIRECTIONS）。
     默认预演不写库；已有完全匹配(status=5)的页跳过，force可重跑；
     默认不改page.match(音释文本占比会扭曲整页状态)，set_page_match可开启
     min_status：只用于报告里整页状态前后对比(page_status_after)，假设状态不低于它的页才会填入cmp_txt；match本身不受它影响
-    flag：写库(--commit)时给被改的页打上的批次标记(字段见FLAG_FIELD)，如--flag=21092026001；不指定就按今天日期自动取下一个序号
+    flag_date：写库(--commit)时给被改的页打标记(字段见FLAG_FIELD)用的日期YYYYMMDD，不指定就是今天；
+    标记=日期+补上音释比对文本后重新算出的整页匹配状态(0-5)，如20260921004
     """
     import helper as hlp
     from web.tw.match import get_best_match
@@ -799,9 +787,10 @@ def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commi
     dbh = hlp.get_db(db)
     vdict = load_variants()
     _, _, _, jobs = _prepare(dbh, direction, only, mapping)
-    flag = resolve_run_flag(dbh, flag, commit)
-    logging.info('%s: %s jobs, commit=%s, db=%s%s' % (direction, len(jobs), commit, db,
-                                                     ', pages written get %s=%s' % (FLAG_FIELD, flag) if flag else ''))
+    date_prefix = flag_date_prefix(flag_date)
+    logging.info('%s: %s jobs, commit=%s, db=%s%s' % (direction, len(jobs), commit, db, (
+        ', pages written get %s=%s000..%s005 (whole-page status after yinshi)' % (
+            FLAG_FIELD, date_prefix, date_prefix)) if commit else ''))
 
     report, stats = [], {}
     for j, job in enumerate(jobs):
@@ -823,11 +812,11 @@ def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commi
             if log is not None:
                 logs = [l for l in page.get('match_logs') or [] if l.get('index_id') != index_id] + [log]
                 if commit:
-                    update = {'match_logs': logs, FLAG_FIELD: flag}
+                    row['flag'] = status_flag(date_prefix, row.get('page_status_after'))
+                    update = {'match_logs': logs, FLAG_FIELD: row['flag']}
                     if set_page_match:
                         update['match'] = get_best_match(logs)
                     dbh.page.update_one({'_id': page['_id']}, {'$set': update})
-                    row['flag'] = flag
                 row['action'] = 'written' if commit else 'dry_run'
                 stats[log['status']] = stats.get(log['status'], 0) + 1
             report.append(row)
@@ -839,12 +828,12 @@ def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commi
 
 
 def run_apply(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', min_status=3, commit=False, overwrite=False,
-              flag=None, mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
+              flag_date=None, mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
     """ 把match_logs里状态>=min_status的匹配文本填入目标音释字的cmp_txt
     默认只填空缺或■的字，不覆盖已有内容；overwrite=True时按最新的匹配文本重填这些音释字，已有的cmp_txt会被改写
     （包括人工改过的，所以先不加--commit看报告里的overwritten数）
-    flag：写库(--commit)时给被改的页(cmp_txt真的有变化的页)打上的批次标记(字段见FLAG_FIELD)，如--flag=21092026001；
-    不指定就按今天日期自动取下一个序号
+    flag_date：写库(--commit)时给被改的页(cmp_txt真的有变化的页)打标记(字段见FLAG_FIELD)用的日期YYYYMMDD，不指定就是今天；
+    标记=日期+补上音释比对文本后重新算出的整页匹配状态(0-5)，如20260921004
     """
     import helper as hlp
     hlp.set_logging('match_yinshi')
@@ -852,10 +841,11 @@ def run_apply(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', min_s
     dbh = hlp.get_db(db)
     vdict = load_variants()
     _, _, _, jobs = _prepare(dbh, direction, only, mapping)
-    flag = resolve_run_flag(dbh, flag, commit)
+    date_prefix = flag_date_prefix(flag_date)
     logging.info('%s: %s jobs, min_status=%s, commit=%s, overwrite=%s, db=%s%s' % (
-        direction, len(jobs), min_status, commit, overwrite, db,
-        ', pages changed get %s=%s' % (FLAG_FIELD, flag) if flag else ''))
+        direction, len(jobs), min_status, commit, overwrite, db, (
+            ', pages changed get %s=%s000..%s005 (whole-page status after yinshi)' % (
+                FLAG_FIELD, date_prefix, date_prefix)) if commit else ''))
 
     report = []
     for j, job in enumerate(jobs):
@@ -873,10 +863,10 @@ def run_apply(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', min_s
             row.update(page_match_change(page, index_id, log, True))
             changes = _cmp_changes(page, ordered, proxies)
             if commit and changes:
+                row['flag'] = status_flag(date_prefix, row.get('page_status_after'))
                 dbh.page.update_one({'_id': page['_id']},
                                     {'$set': dict({'chars.%s.cmp_txt' % i: v for i, v in changes.items()},
-                                                  **{FLAG_FIELD: flag})})
-                row['flag'] = flag
+                                                  **{FLAG_FIELD: row['flag']})})
             report.append(dict(row, action='written' if commit else 'dry_run', status=log.get('status'),
                                note='%s chars changed (%s overwrote an existing cmp_txt), %s placeholders' % (
                                    len(changes), sum(1 for i in changes if page['chars'][i].get('cmp_txt')),

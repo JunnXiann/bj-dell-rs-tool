@@ -358,19 +358,33 @@ def test_page_status_summary_counts_before_and_after():
     assert my.page_status_summary(rows)[3:7:3] == (4, 3)  # 4页参与统计，其中3页会填入cmp_txt
 
 
-def test_make_run_flag_is_date_plus_three_digit_sequence():
-    from datetime import datetime
-    day = datetime(2026, 9, 21)
-    assert my.make_run_flag(day) == 21092026001
-    assert my.make_run_flag(day, 21092026001) == 21092026002
-    assert my.make_run_flag(day, 21092026009) == 21092026010
-    assert my.make_run_flag(day, 20260206002) == 21092026001  # 别的日期或别的格式的标记不影响今天的序号
-    assert my.make_run_flag(datetime(2026, 9, 1)) == 1092026001  # 日期开头的0不保留，也不会与其它日期混淆
-    try:
-        my.make_run_flag(day, 21092026999)
-        assert False
-    except ValueError:
-        pass
+def test_status_flag_is_date_plus_the_whole_page_status_after_yinshi():
+    date = my.flag_date_prefix('20260921')
+    assert date == 20260921
+    assert [my.status_flag(date, k) for k in range(6)] == [20260921000, 20260921001, 20260921002, 20260921003,
+                                                          20260921004, 20260921005]
+    assert my.status_flag(date, '') == my.status_flag(date, None) == 20260921002  # 算不出状态时按2(无匹配)
+    assert len(str(my.flag_date_prefix())) == 8  # 不指定就是今天
+    for bad in ('2026-09-21', '20261321', 'abc'):
+        try:
+            my.flag_date_prefix(bad)
+            assert False, bad
+        except ValueError:
+            pass
+
+
+def test_page_with_no_earlier_whole_page_match_is_recalculated_from_the_yinshi_match():
+    page = {'name': 'SX_9_9_9', 'match_logs': [], 'chars': [], 'columns': [], 'base_txt': '字' * 100}
+    page['chars'] = [{'char_id': 'b1c1c%d' % k, 'cid': k, 'txt': '字'} for k in range(1, 101)]
+    page['columns'] = [{'column_id': 'b1c1', 'cid': 1}]
+    log = {'len_hit': 96, 'len_similar': 95, 'len_match_txt': 98}
+    r = my.page_match_change(page, 'fz_yinshi_scoped', log, applied=True)
+    assert (r['page_status_before'], r['page_status_after']) == ('', 4)
+    # 音释匹配不够好、没填入cmp_txt时，仍按它重新算状态(它是这页现在唯一的匹配)，报告里标“not applied”
+    weak = {'len_hit': 30, 'len_similar': 20, 'len_match_txt': 40}
+    r = my.page_match_change(page, 'fz_yinshi_scoped', weak, applied=False)
+    assert r['page_status_before'] == '' and r['page_status_after'] == 2 and r['page_change'] == 'not applied'
+    assert my.status_flag(20260921, r['page_status_after']) == 20260921002
 
 
 def test_page_match_change_ignores_the_length_of_an_unrelated_earlier_match_text():
