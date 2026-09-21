@@ -396,3 +396,87 @@ def test_page_match_change_ignores_the_length_of_an_unrelated_earlier_match_text
     r = my.page_match_change(page, 'fz_yinshi_scoped', {'len_hit': 180, 'len_similar': 176, 'len_match_txt': 185}, True)
     assert (r['page_status_before'], r['page_status_after'], r['page_change']) == (2, 4, 'improved')
     assert r['page_r_hit_after'] == 1.0 and r['page_r_similar_after'] == 0.92
+
+
+def test_has_e_format_looks_at_columns_and_chars():
+    assert my.has_e_format({'columns': [['E', 2]], 'chars': []})
+    assert my.has_e_format({'columns': [], 'chars': [['E', 3, None, 12]]})
+    assert not my.has_e_format({'columns': [['C', 1], ['G', 2]], 'chars': [['N', 1, 2, 3]]})
+    assert not my.has_e_format({'columns': [], 'chars': []}) and not my.has_e_format({})
+
+
+class FlagFakeDb:
+    """ reel/page两个集合的极简替身，只支持flag_e用到的查询"""
+    def __init__(self, reels, pages):
+        import re
+        outer = self
+        outer.reel_docs, outer.page_docs = reels, pages
+
+        class Reel:
+            def find(self, cond, proj=None):
+                rx = cond.get('reel_code', {}).get('$regex')
+                return [r for r in outer.reel_docs if r.get('format') and (not rx or re.search(rx, r['reel_code']))]
+
+        class Page:
+            def find(self, cond, proj=None):
+                return [dict(p) for p in outer.page_docs if p['name'] in cond['name']['$in']]
+
+            def update_many(self, cond, upd):
+                for p in outer.page_docs:
+                    if p['name'] in cond['name']['$in']:
+                        p.update(upd['$set'])
+        self.reel, self.page = Reel(), Page()
+
+
+def flag_e_fixture():
+    reels = [
+        {'reel_code': 'SX0001_010', 'format': [
+            {'name': 'SX_1_10_78', 'columns': [['E', 2]], 'chars': []},
+            {'name': 'SX_1_10_79', 'columns': [['C', 1]], 'chars': []},  # 没有E
+            {'name': 'SX_1_10_80', 'columns': [], 'chars': [['E', 3, None, 12]]}]},
+        {'reel_code': 'SX0001_011', 'format': [{'name': 'SX_1_10_80', 'columns': [['E', 1]], 'chars': []}]},  # 共用页
+        {'reel_code': 'FZ0002_012z1', 'format': [{'name': 'FZ_2_1_2', 'columns': [['E', 5]], 'chars': []},
+                                                 {'name': 'FZ_2_1_9', 'columns': [['E', 1]], 'chars': []}]},
+        {'reel_code': 'SX0001_012', 'format': []},
+    ]
+    pages = [{'name': 'SX_1_10_78', 'flag1': 91220251}, {'name': 'SX_1_10_79'}, {'name': 'SX_1_10_80'},
+             {'name': 'FZ_2_1_2', 'flag1': 20260921111}]  # FZ_2_1_9没有页数据
+    return reels, pages
+
+
+def run_flag_e_on_fake(monkeypatch_db, **kw):
+    import helper
+    saved = helper.get_db, helper.set_logging
+    helper.get_db, helper.set_logging = (lambda db_id: monkeypatch_db), (lambda *a, **k: None)
+    try:
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            my.run_flag_e(value=20260921111, report_dir=d, **kw)
+            import csv, glob
+            return list(csv.DictReader(open(glob.glob(d + '/flag_e-*.csv')[0], encoding='utf-8-sig')))
+    finally:
+        helper.get_db, helper.set_logging = saved
+
+
+def test_flag_e_dry_run_reports_and_writes_nothing():
+    db = FlagFakeDb(*flag_e_fixture())
+    rows = {r['page']: r for r in run_flag_e_on_fake(db)}
+    assert set(rows) == {'SX_1_10_78', 'SX_1_10_80', 'FZ_2_1_2', 'FZ_2_1_9'}  # 没有E的SX_1_10_79不在里面
+    assert rows['SX_1_10_80']['reels'] == 'SX0001_010,SX0001_011'  # 共用页只出现一次，列出两个卷
+    assert (rows['SX_1_10_78']['action'], rows['SX_1_10_78']['prev_flag']) == ('dry_run', '91220251')
+    assert rows['FZ_2_1_2']['action'] == 'already_set' and rows['FZ_2_1_9']['action'] == 'no_page'
+    assert [p.get('flag1') for p in db.page_docs] == [91220251, None, None, 20260921111]
+
+
+def test_flag_e_commit_overwrites_or_keeps_existing_and_can_filter_reels():
+    db = FlagFakeDb(*flag_e_fixture())
+    run_flag_e_on_fake(db, commit=True, keep_existing=True)
+    assert [p.get('flag1') for p in db.page_docs] == [91220251, None, 20260921111, 20260921111]
+    db = FlagFakeDb(*flag_e_fixture())
+    rows = run_flag_e_on_fake(db, commit=True)  # 不加keep_existing：覆盖别的批次标记
+    assert [p.get('flag1') for p in db.page_docs] == [20260921111, None, 20260921111, 20260921111]
+    assert {r['action'] for r in rows} == {'written', 'already_set', 'no_page'}
+    db = FlagFakeDb(*flag_e_fixture())
+    rows = run_flag_e_on_fake(db, commit=True, reel_regex='^SX')  # 只看SX的卷
+    assert {r['page'] for r in rows} == {'SX_1_10_78', 'SX_1_10_80'}
+    assert db.page_docs[3]['flag1'] == 20260921111 and db.page_docs[0]['flag1'] == 20260921111

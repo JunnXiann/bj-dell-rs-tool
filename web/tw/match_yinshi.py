@@ -8,6 +8,7 @@
 
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
     python match_yinshi.py preview [--sutra=FZ0002] [--direction=fz2sx|sx2fz] [--db=...]   # 只读，出报告；不填sutra=全部经
+    python match_yinshi.py flag_e --value=20260921111 [--field=flag1] [--reel_regex=^SX] [--keep_existing] [--commit]   # 给所有含E格式的页打标记
     python match_yinshi.py plan  [--with_counts]
     python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit [--flag_date=20260921]] [--force] [--set_page_match]
     python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--overwrite] [--commit [--flag_date=20260921]]
@@ -1029,10 +1030,88 @@ def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats
         if detail:
             out += render_page_view(page, t, vdict, cmp_by_idx)
 
+def has_e_format(fmt):
+    """ reel.format里的一条(某页的格式)是否含E(音释)：整列的columns=[[格式, 列cid]]或字的chars=[[格式, 列cid, 起, 止]]"""
+    return any(x and x[0] == 'E' for x in (fmt.get('columns') or []) + (fmt.get('chars') or []))
+
+
+def find_e_pages(db, reel_regex=''):
+    """ 库里所有含E(音释)格式的页：{页名: [有E格式的卷编码]}。E格式记在卷的format里，按页名对应，不必读页，
+    也不限于对照表里的经"""
+    cond = {'format.0': {'$exists': True}}
+    if reel_regex:
+        cond['reel_code'] = {'$regex': reel_regex}
+    proj = {'reel_code': 1, 'format.name': 1, 'format.columns': 1, 'format.chars': 1}
+
+    def scan():
+        pages = {}
+        for reel in db.reel.find(cond, proj):
+            for fmt in reel.get('format') or []:
+                if fmt.get('name') and has_e_format(fmt):
+                    pages.setdefault(fmt['name'], []).append(reel['reel_code'])
+        return pages
+    return _with_retry(scan)
+
+
+def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex='', keep_existing=False, commit=False,
+               report_dir=REPORT_DIR):
+    """ 给库里所有含E(音释)格式的页打标记，不限于对照表里的经，也不需要匹配。默认只预演，加--commit才写库。
+    value：写入的值，如--value=20260921111；field：写入的字段，默认flag1
+    reel_regex：只看卷编码符合它的卷，如--reel_regex=^SX(默认全部)
+    keep_existing：页上该字段已有别的值时不改（不加则覆盖）。flag1在别的脚本里也用作批次标记和查询条件，
+    覆盖前先看预演报告里的prev_flag，或加keep_existing
+    输出flag_e-<时间>.csv：每页一行(页名、有E格式的卷、原来的值、处理结果)
+    """
+    import helper as hlp
+    hlp.set_logging('match_yinshi')
+    value = int(str(value).strip())
+    dbh = hlp.get_db(db)
+    epages = find_e_pages(dbh, reel_regex)
+    names = sorted(epages, key=hlp.align_code)
+    logging.info('%s pages with E format found in %s reel filter=%r, db=%s, commit=%s' % (
+        len(names), 'all reels' if not reel_regex else 'the reels matching', reel_regex, db, commit))
+
+    rows, before = [], {}
+    for i in range(0, len(names), 500):
+        chunk = names[i:i + 500]
+        found = {d['name']: d for d in _with_retry(lambda: list(dbh.page.find({'name': {'$in': chunk}}, {'name': 1, field: 1})))}
+        todo = []
+        for name in chunk:
+            doc = found.get(name)
+            prev = doc.get(field) if doc else None
+            has_prev = prev not in (None, '')
+            if not doc:
+                action = 'no_page'
+            elif prev == value:
+                action = 'already_set'
+            elif has_prev and keep_existing:
+                action = 'kept_existing'
+            else:
+                action = 'written' if commit else 'dry_run'
+                todo.append(name)
+                if has_prev:
+                    before[prev] = before.get(prev, 0) + 1
+            rows.append({'page': name, 'reels': ','.join(epages[name]), 'prev_flag': '' if prev is None else prev,
+                         'action': action})
+        if commit and todo:
+            _with_retry(lambda: dbh.page.update_many({'name': {'$in': todo}}, {'$set': {field: value}}))
+    now = datetime.now().strftime('%Y%m%d-%H%M%S')
+    write_csv(path.join(report_dir, 'flag_e-%s.csv' % now), rows, ['page', 'reels', 'prev_flag', 'action'])
+    count = {}
+    for r in rows:
+        count[r['action']] = count.get(r['action'], 0) + 1
+    logging.info('%s=%s: %s' % (field, value, count))
+    if before:
+        top = sorted(before.items(), key=lambda kv: -kv[1])
+        logging.warning('%s pages already had another %s value that %s: %s' % (
+            sum(before.values()), field, 'is overwritten' if commit else 'would be overwritten',
+            ', '.join('%s x%s' % kv for kv in top[:10]) + (' ...' if len(top) > 10 else '')))
+
+
 # endregion
 
 
 if __name__ == '__main__':
     import fire
 
-    fire.Fire({'plan': run_plan, 'match': run_match, 'apply': run_apply, 'preview': run_preview})
+    fire.Fire({'plan': run_plan, 'match': run_match, 'apply': run_apply, 'preview': run_preview, 'flag_e': run_flag_e})
