@@ -423,8 +423,10 @@ class FlagFakeDb:
 
             def update_many(self, cond, upd):
                 for p in outer.page_docs:
-                    if p['name'] in cond['name']['$in']:
-                        p.update(upd['$set'])
+                    if p['name'] in cond['name']['$in'] and all(p.get(k) == v for k, v in cond.items() if k != 'name'):
+                        p.update(upd.get('$set', {}))
+                        for k in upd.get('$unset', {}):
+                            p.pop(k, None)
         self.reel, self.page = Reel(), Page()
 
 
@@ -460,7 +462,7 @@ def run_flag_e_on_fake(monkeypatch_db, value=20260921111, **kw):
 
 def test_flag_e_dry_run_reports_and_writes_nothing():
     db = FlagFakeDb(*flag_e_fixture())
-    rows = {r['page']: r for r in run_flag_e_on_fake(db)}
+    rows = {r['page']: r for r in run_flag_e_on_fake(db, reel_regex='')}  # 空=所有藏
     assert set(rows) == {'SX_1_10_78', 'SX_1_10_80', 'FZ_2_1_2', 'FZ_2_1_9'}  # 没有E的SX_1_10_79不在里面
     assert rows['SX_1_10_80']['reels'] == 'SX0001_010,SX0001_011'  # 共用页只出现一次，列出两个卷
     assert (rows['SX_1_10_78']['action'], rows['SX_1_10_78']['prev_flag']) == ('dry_run', '91220251')
@@ -470,10 +472,10 @@ def test_flag_e_dry_run_reports_and_writes_nothing():
 
 def test_flag_e_commit_overwrites_or_keeps_existing_and_can_filter_reels():
     db = FlagFakeDb(*flag_e_fixture())
-    run_flag_e_on_fake(db, commit=True, keep_existing=True)
+    run_flag_e_on_fake(db, commit=True, keep_existing=True, reel_regex='')
     assert [p.get('flag1') for p in db.page_docs] == [91220251, None, 20260921111, 20260921111]
     db = FlagFakeDb(*flag_e_fixture())
-    rows = run_flag_e_on_fake(db, commit=True)  # 不加keep_existing：覆盖别的批次标记
+    rows = run_flag_e_on_fake(db, commit=True, reel_regex='')  # 不加keep_existing：覆盖别的批次标记
     assert [p.get('flag1') for p in db.page_docs] == [20260921111, None, 20260921111, 20260921111]
     assert {r['action'] for r in rows} == {'written', 'already_set', 'no_page'}
     db = FlagFakeDb(*flag_e_fixture())
@@ -490,7 +492,8 @@ def test_flag_e_not_flag3_date_marks_only_the_pages_match_and_apply_did_not_touc
         if p['name'] == 'SX_1_10_80':
             p['flag3'] = 2606260924  # 别的批次的标记，不在今天的000-005里
     db = FlagFakeDb(reels, pages)
-    rows = {r['page']: r for r in run_flag_e_on_fake(db, value=20260921112, commit=True, not_flag3_date='20260921')}
+    rows = {r['page']: r for r in run_flag_e_on_fake(db, value=20260921112, commit=True, not_flag3_date='20260921',
+                                                     reel_regex='')}
     assert rows['SX_1_10_78']['action'] == 'skipped_touched' and rows['SX_1_10_78']['flag3'] == '20260921003'
     assert rows['SX_1_10_80']['action'] == 'written' and rows['FZ_2_1_2']['action'] == 'written'
     assert [p.get('flag1') for p in db.page_docs] == [91220251, None, 20260921112, 20260921112]  # 被跳过的页flag1不动
@@ -498,10 +501,116 @@ def test_flag_e_not_flag3_date_marks_only_the_pages_match_and_apply_did_not_touc
     # 日期范围的边界：000和005算处理过，006和昨天的不算
     reels, pages = flag_e_fixture()
     pages[0]['flag3'], pages[2]['flag3'], pages[3]['flag3'] = 20260921000, 20260921005, 20260921006
-    rows = {r['page']: r['action'] for r in run_flag_e_on_fake(FlagFakeDb(reels, pages), value=1, not_flag3_date=20260921)}
+    rows = {r['page']: r['action'] for r in run_flag_e_on_fake(FlagFakeDb(reels, pages), value=1, reel_regex='',
+                                                               not_flag3_date=20260921)}
     assert rows['SX_1_10_78'] == rows['SX_1_10_80'] == 'skipped_touched' and rows['FZ_2_1_2'] == 'dry_run'
     try:
         run_flag_e_on_fake(FlagFakeDb(*flag_e_fixture()), value=1, not_flag3_date='2026-09-21')
+        assert False
+    except ValueError:
+        pass
+
+
+def test_flag_e_only_touches_sx_pages_by_default():
+    db = FlagFakeDb(*flag_e_fixture())
+    rows = run_flag_e_on_fake(db, value=20260921112, commit=True)  # 不指定reel_regex
+    assert {r['page'] for r in rows} == {'SX_1_10_78', 'SX_1_10_80'}  # 福州藏的FZ_2_1_2、FZ_2_1_9不在报告里
+    fz = [p for p in db.page_docs if p['name'].startswith('FZ_')]
+    assert fz and all(p.get('flag1') == 20260921111 for p in fz)  # 福州藏的页一个字段都没动
+    assert [p.get('flag1') for p in db.page_docs if p['name'].startswith('SX_')] == [20260921112, None, 20260921112]
+    for code in ('SX0001_010', 'SX0027_001z1'):
+        assert __import__('re').search(my.SX_REEL_REGEX, code)
+    assert not __import__('re').search(my.SX_REEL_REGEX, 'FZ0002_012z1')
+
+
+def test_flag_e_refuses_the_plain_flag_field():
+    # 平台用flag(无数字)选页，如flag=717；--field=flag曾经把它覆盖掉
+    db = FlagFakeDb(*flag_e_fixture())
+    for bad in ('flag', 'flags', 'cmp_txt', ''):
+        try:
+            run_flag_e_on_fake(db, field=bad, commit=True)
+            assert False, bad
+        except ValueError:
+            pass
+    assert [p.get('flag1') for p in db.page_docs] == [91220251, None, None, 20260921111]
+    run_flag_e_on_fake(FlagFakeDb(*flag_e_fixture()), field='flag3')  # flag3、flag2这类可以
+
+
+def test_flag_e_undo_restores_previous_values_exactly_and_leaves_changed_pages():
+    import csv, glob, helper, tempfile
+    reels, _ = flag_e_fixture()
+    pages = [{'name': 'SX_1_10_78', 'flag1': 91220251}, {'name': 'SX_1_10_79', 'flag1': 7},
+             {'name': 'SX_1_10_80'}, {'name': 'FZ_2_1_2', 'flag1': 25674}]
+    db = FlagFakeDb(reels, pages)
+    saved = helper.get_db, helper.set_logging
+    helper.get_db, helper.set_logging = (lambda db_id: db), (lambda *a, **k: None)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            my.run_flag_e(value=20260921111, reel_regex='', commit=True, report_dir=d)  # 误把所有藏都打了标记
+            report = glob.glob(d + '/flag_e-*.csv')[0]
+            assert [p.get('flag1') for p in db.page_docs] == [20260921111, 7, 20260921111, 20260921111]
+            db.page_docs[3]['flag1'] = 999  # FZ_2_1_2之后被别的操作改过
+            # 预演：不写库
+            my.run_flag_e_undo(report=report, field='flag1', value=20260921111, report_dir=d)
+            assert [p.get('flag1') for p in db.page_docs] == [20260921111, 7, 20260921111, 999]
+            my.run_flag_e_undo(report=report, field='flag1', value=20260921111, commit=True, report_dir=d)
+            rows = {r['page']: r for r in csv.DictReader(open(glob.glob(d + '/flag_e_undo-*.csv')[-1], encoding='utf-8-sig'))}
+    finally:
+        helper.get_db, helper.set_logging = saved
+    assert db.page_docs[0]['flag1'] == 91220251 and isinstance(db.page_docs[0]['flag1'], int)  # 原值(整数)还原
+    assert 'flag1' not in db.page_docs[2]  # 原来没有这个字段：删掉，而不是留下空值
+    assert db.page_docs[3]['flag1'] == 999  # 之后被改过的页不动
+    assert db.page_docs[1]['flag1'] == 7  # 没有E格式的页从头到尾没碰过
+    assert {k: v['action'] for k, v in rows.items()} == {'SX_1_10_78': 'restored', 'SX_1_10_80': 'restored',
+                                                          'FZ_2_1_2': 'skipped_changed'}
+
+
+def test_flag_e_undo_of_a_dry_run_report_does_nothing():
+    import glob, helper, tempfile
+    db = FlagFakeDb(*flag_e_fixture())
+    saved = helper.get_db, helper.set_logging
+    helper.get_db, helper.set_logging = (lambda db_id: db), (lambda *a, **k: None)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            my.run_flag_e(value=20260921111, reel_regex='', report_dir=d)  # 预演，报告里没有written
+            before = [dict(p) for p in db.page_docs]
+            my.run_flag_e_undo(report=glob.glob(d + '/flag_e-*.csv')[0], field='flag1', value=20260921111, commit=True,
+                               report_dir=d)
+    finally:
+        helper.get_db, helper.set_logging = saved
+    assert db.page_docs == before
+
+
+def test_flag_e_undo_can_restore_the_plain_flag_field_but_not_arbitrary_fields():
+    import csv, glob, helper, tempfile
+    reels, _ = flag_e_fixture()
+    # 误把plain flag改成了20260921112：三页原来的flag分别是717、404和没有
+    pages = [{'name': 'SX_1_10_78', 'flag': 20260921112}, {'name': 'SX_1_10_80', 'flag': 20260921112},
+             {'name': 'FZ_2_1_2', 'flag': 20260921112}]
+    db = FlagFakeDb(reels, pages)
+    saved = helper.get_db, helper.set_logging
+    helper.get_db, helper.set_logging = (lambda db_id: db), (lambda *a, **k: None)
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            report = d + '/flag_e-x.csv'
+            with open(report, 'w', encoding='utf-8-sig', newline='') as f:
+                f.write('page,reels,prev_flag,flag3,action\nSX_1_10_78,SX0001_010,717,,written\n'
+                        'SX_1_10_80,SX0001_010,404,,written\nFZ_2_1_2,FZ0002_012z1,,,written\n'
+                        'SX_1_10_81,SX0001_010,5,,skipped_touched\n')
+            my.run_flag_e_undo(report=report, field='flag', value=20260921112, commit=True, report_dir=d)
+            for bad in ('cmp_txt', 'name', ''):
+                try:
+                    my.run_flag_e_undo(report=report, field=bad, value=1, report_dir=d)
+                    assert False, bad
+                except ValueError:
+                    pass
+    finally:
+        helper.get_db, helper.set_logging = saved
+    assert db.page_docs[0]['flag'] == 717 and db.page_docs[1]['flag'] == 404
+    assert 'flag' not in db.page_docs[2]  # 原来没有值的页删掉字段
+    # flag_e打标记时仍然拒绝plain flag
+    try:
+        my.check_flag_field('flag')
         assert False
     except ValueError:
         pass

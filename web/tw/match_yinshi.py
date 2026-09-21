@@ -8,7 +8,8 @@
 
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
     python match_yinshi.py preview [--sutra=FZ0002] [--direction=fz2sx|sx2fz] [--db=...]   # 只读，出报告；不填sutra=全部经
-    python match_yinshi.py flag_e --value=20260921111 [--field=flag1] [--reel_regex=^SX] [--keep_existing] [--not_flag3_date=20260921] [--commit]   # 给所有含E格式的页打标记
+    python match_yinshi.py flag_e --value=20260921111 [--field=flag1] [--reel_regex=^FZ] [--keep_existing] [--not_flag3_date=20260921] [--commit]   # 给思溪藏所有含E格式的页打标记，默认只动SX
+    python match_yinshi.py flag_e_undo --report=data/yinshi_match/flag_e-xxx.csv --field=flag1 --value=20260921111 [--commit]   # 按flag_e的报告恢复原值
     python match_yinshi.py plan  [--with_counts]
     python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit [--flag_date=20260921]] [--force] [--set_page_match]
     python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--overwrite] [--commit [--flag_date=20260921]]
@@ -286,6 +287,7 @@ def load_existing_z_reels(db):
     return {r['reel_code']: r.get('reel_type') for r in db.reel.find(cond, {'reel_code': 1, 'reel_type': 1})}
 
 
+SX_REEL_REGEX = r'^SX\d+_'  # 思溪藏的卷编码，如SX0001_010、SX0027_001z1
 FLAG_FIELD = 'flag3'  # 页数据里标记“这次改了哪些页”的字段；match.py等批量脚本也用它，值如151225001、20260206002
 
 
@@ -1030,6 +1032,14 @@ def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats
         if detail:
             out += render_page_view(page, t, vdict, cmp_by_idx)
 
+def check_flag_field(field, allow_plain=False):
+    """ 打标记只允许flag1、flag2、flag3这类批次标记字段。平台用flag(无数字)表示页的处理阶段并据此选页(如flag=717)，
+    输错成--field=flag会覆盖它，所以打标记时拒绝。恢复(allow_plain=True)时要能把误覆盖的flag写回去，所以放行"""
+    if not re.fullmatch(r'flag\d*' if allow_plain else r'flag\d+', str(field)):
+        raise ValueError('field must be flag1, flag2, flag3 ... (got %r); the plain "flag" field is used for '
+                         'selecting pages and must not be overwritten' % field)
+
+
 def has_e_format(fmt):
     """ reel.format里的一条(某页的格式)是否含E(音释)：整列的columns=[[格式, 列cid]]或字的chars=[[格式, 列cid, 起, 止]]"""
     return any(x and x[0] == 'E' for x in (fmt.get('columns') or []) + (fmt.get('chars') or []))
@@ -1053,11 +1063,11 @@ def find_e_pages(db, reel_regex=''):
     return _with_retry(scan)
 
 
-def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex='', keep_existing=False, not_flag3_date=None,
+def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex=SX_REEL_REGEX, keep_existing=False, not_flag3_date=None,
                commit=False, report_dir=REPORT_DIR):
-    """ 给库里所有含E(音释)格式的页打标记，不限于对照表里的经，也不需要匹配。默认只预演，加--commit才写库。
+    """ 给思溪藏(SX)所有含E(音释)格式的页打标记，不限于对照表里的经，也不需要匹配。默认只预演，加--commit才写库。
     value：写入的值，如--value=20260921111；field：写入的字段，默认flag1
-    reel_regex：只看卷编码符合它的卷，如--reel_regex=^SX(默认全部)
+    reel_regex：只看卷编码符合它的卷，默认只看思溪藏(^SX\\d+_)；要看别的藏，如--reel_regex=^FZ；传空字符串(--reel_regex=)是所有藏
     keep_existing：页上该字段已有别的值时不改（不加则覆盖）。flag1在别的脚本里也用作批次标记和查询条件，
     覆盖前先看预演报告里的prev_flag，或加keep_existing
     not_flag3_date：日期YYYYMMDD。跳过flag3是该日期000-005(match/apply按整页状态打的标记)的页，只标记其余的页，
@@ -1066,6 +1076,7 @@ def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex='', keep_
     """
     import helper as hlp
     hlp.set_logging('match_yinshi')
+    check_flag_field(field)
     value = int(str(value).strip())
     touched = None  # match/apply标记过的flag3范围：日期000-005
     if not_flag3_date not in (None, ''):
@@ -1073,8 +1084,8 @@ def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex='', keep_
     dbh = hlp.get_db(db)
     epages = find_e_pages(dbh, reel_regex)
     names = sorted(epages, key=hlp.align_code)
-    logging.info('%s pages with E format found in %s reel filter=%r, db=%s, commit=%s' % (
-        len(names), 'all reels' if not reel_regex else 'the reels matching', reel_regex, db, commit))
+    logging.info('%s pages with E format found in %s, db=%s, commit=%s' % (
+        len(names), 'reels matching %r' % reel_regex if reel_regex else 'ALL reels (every tripitaka)', db, commit))
 
     rows, before = [], {}
     for i in range(0, len(names), 500):
@@ -1117,10 +1128,70 @@ def run_flag_e(value, field='flag1', db='tw-test-readonly', reel_regex='', keep_
             ', '.join('%s x%s' % kv for kv in top[:10]) + (' ...' if len(top) > 10 else '')))
 
 
+def parse_flag_value(text):
+    """ 报告csv里的原值是文本：整数还原成整数，其它保持文本"""
+    text = str(text).strip()
+    return int(text) if re.fullmatch(r'-?\d+', text) else text
+
+
+def run_flag_e_undo(report, field, value, db='tw-test-readonly', commit=False, report_dir=REPORT_DIR):
+    """ 按flag_e的报告把打过标记的页恢复成原来的值。默认只预演，加--commit才写库。
+    report：flag_e-<时间>.csv的路径(只处理其中action=written的页)；field、value：那次flag_e写入的字段和值，
+    如--field=flag1 --value=20260921111。只有页上现在还是这个值才恢复，之后被别的操作改过的页不动(skipped_changed)；
+    原来没有值(csv里prev_flag为空)的页删掉该字段，其它页写回原值。
+    注意：csv里原值是文本，整数(平台的flag一直是整数)还原成整数；原值是字符串的话类型会变
+    输出flag_e_undo-<时间>.csv：每页一行(页名、现在的值、恢复成什么、处理结果)"""
+    import helper as hlp
+    hlp.set_logging('match_yinshi')
+    check_flag_field(field, allow_plain=True)  # 恢复时可以是flag：写回被误覆盖的值
+    value = int(str(value).strip())
+    with open(report, encoding='utf-8-sig', newline='') as f:
+        written = [r for r in csv.DictReader(f) if r.get('action') == 'written']
+    if not written:
+        logging.info('no action=written rows in %s, nothing to restore (was that report a dry run?)' % report)
+        return
+    dbh = hlp.get_db(db)
+    logging.info('%s rows written by that flag_e run; restoring %s (currently %s) in %s, commit=%s' % (
+        len(written), field, value, db, commit))
+    rows = []
+    for i in range(0, len(written), 500):
+        chunk = written[i:i + 500]
+        found = {d['name']: d for d in _with_retry(
+            lambda: list(dbh.page.find({'name': {'$in': [r['page'] for r in chunk]}}, {'name': 1, field: 1})))}
+        groups = {}  # 恢复成的值(None=删除该字段) -> [页名]
+        for r in chunk:
+            doc = found.get(r['page'])
+            prev = None if r['prev_flag'] in ('', None) else parse_flag_value(r['prev_flag'])
+            row = {'page': r['page'], 'current': '' if not doc or doc.get(field) is None else doc[field],
+                   'restore_to': '(remove field)' if prev is None else prev}
+            if not doc:
+                row['action'] = 'no_page'
+            elif doc.get(field) != value:
+                row['action'] = 'skipped_changed'
+            else:
+                row['action'] = 'restored' if commit else 'would_restore'
+                groups.setdefault(prev, []).append(r['page'])
+            rows.append(row)
+        if commit:
+            for prev, names in groups.items():
+                update = {'$unset': {field: ''}} if prev is None else {'$set': {field: prev}}
+                _with_retry(lambda: dbh.page.update_many({'name': {'$in': names}, field: value}, update))
+    now = datetime.now().strftime('%Y%m%d-%H%M%S')
+    write_csv(path.join(report_dir, 'flag_e_undo-%s.csv' % now), rows, ['page', 'current', 'restore_to', 'action'])
+    count = {}
+    for r in rows:
+        count[r['action']] = count.get(r['action'], 0) + 1
+    logging.info('%s: %s' % (field, count))
+    changed = count.get('skipped_changed')
+    if changed:
+        logging.warning('%s pages no longer hold %s=%s (changed since), left alone' % (changed, field, value))
+
+
 # endregion
 
 
 if __name__ == '__main__':
     import fire
 
-    fire.Fire({'plan': run_plan, 'match': run_match, 'apply': run_apply, 'preview': run_preview, 'flag_e': run_flag_e})
+    fire.Fire({'plan': run_plan, 'match': run_match, 'apply': run_apply, 'preview': run_preview, 'flag_e': run_flag_e,
+               'flag_e_undo': run_flag_e_undo})
