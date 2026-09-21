@@ -44,7 +44,7 @@ SHORT_MIN_SCORE = 80  # 最佳位置的相似度(0-100)至少达到该值
 SHORT_MIN_GAP = 10  # 最佳位置比其它位置至少高出该值，重复出现的文本(如“第N卷不出字”)因此不匹配
 # 首次匹配只认顺序一致的最长一段；同一页里两块文字前后颠倒时，另一块会被留下，因此再单独找一次
 LEFTOVER_MIN_LEN = 10  # 连续没有对应文本的字数不少于该值才单独再找
-LEFTOVER_MAX_RUNS = 8  # 每页最多补找几段
+LEFTOVER_MAX_TRIES = 30  # 每页补找时最多调用几次查找
 Z_REEL_RE = re.compile(r'^([A-Z]+\d+)_(\d+)z(\d+)$')
 TITLE_RE = re.compile(r'經卷第[一二三四五六七八九十百千〇零]+重?$')  # 如“放光般若波羅蜜經卷第十二重”
 
@@ -544,45 +544,59 @@ def leftover_segments(cmps):
 
 
 def assemble_match_txt(cmps, segments, rescued):
-    """ 按目标字的顺序拼出新的匹配文本：有对应文本的段用已对上的cmp_txt，补找到的段(rescued: {段序号: 文本})用新找到的，
-    仍然没有对应文本的段略去（应用时它们仍是■）"""
+    """ 按目标字的顺序拼出新的匹配文本：有对应文本的段用已对上的cmp_txt，补找到的(rescued: [(起, 止, 文本)]，
+    起止是cmps下标)按位置放回，仍然没有对应文本的字略去（应用时它们仍是■）"""
     parts = []
-    for n, (missing, a, b) in enumerate(segments):
+    for missing, a, b in segments:
         if not missing:
             parts.append(''.join(cmps[a:b]))
-        elif n in rescued:
-            parts.append(rescued[n])
+        else:
+            parts += [txt for ra, rb, txt in sorted(rescued) if a <= ra and rb <= b]
     return '\n'.join(parts)
 
 
+def leftover_candidates(cols, a, b):
+    """ 没有对应文本的一段字[a, b)里，可以单独去找的子段：起止都落在列的边界上，不少于LEFTOVER_MIN_LEN字，从长到短
+    cols是按阅读顺序每个字所在的列。整段里若夹着另一版写法不同的字，整段找不到，去掉它们所在的列后往往能找到"""
+    bounds = [a] + [i for i in range(a + 1, b) if cols[i] != cols[i - 1]] + [b]
+    cands = [(x, y) for i, x in enumerate(bounds) for y in bounds[i + 1:] if y - x >= LEFTOVER_MIN_LEN]
+    return sorted(cands, key=lambda c: c[0] - c[1])
+
+
 def rescue_leftovers(page, t, vdict, index_id, first_match, ref_txt):
-    """ 首次匹配后，把连续没有对应文本的目标字再单独到参考文本里找一次，处理同一页两块文字前后顺序颠倒的情况
+    """ 首次匹配后，把没有对应文本的目标字再单独到参考文本里找，处理同一页两块文字前后顺序颠倒的情况
     返回(新匹配文本, 补找到的字数, [补找到的文本])；没有补找到时原样返回(first_match, 0, [])
     """
     from util.find_match import find_best_match
     from web.tw.match import get_match_info
-    status, _, proxies = _fill_cmp(page, t, index_id, vdict, min_status=0, overwrite=True,
-                                   log={'index_id': index_id, 'match_txt': first_match, 'status': 5})
+    status, ordered, proxies = _fill_cmp(page, t, index_id, vdict, min_status=0, overwrite=True,
+                                         log={'index_id': index_id, 'match_txt': first_match, 'status': 5})
     if status != 'ok':
         return first_match, 0, []
     cmps = [p.get('cmp_txt') for p in proxies]
+    cols = [page['chars'][i]['char_id'].rsplit('c', 1)[0] for i in ordered]
     segments = leftover_segments(cmps)
-    rescued, found, tried = {}, [], 0
-    for n, (missing, a, b) in enumerate(segments):
-        if not missing or b - a < LEFTOVER_MIN_LEN or tried >= LEFTOVER_MAX_RUNS:
-            continue
-        tried += 1
-        run_txt = ''.join(p['txt'] for p in proxies[a:b])
-        m2 = find_best_match(run_txt, ref_txt)[0].strip('\n')
-        if not m2 or m2 in first_match:  # 没找到，或找到的就是已经用过的那段
-            continue
-        if get_match_info(run_txt, m2)['status'] < 3:
-            continue
-        rescued[n] = m2
-        found.append(m2)
+    todo = [(a, b) for missing, a, b in segments if missing and b - a >= LEFTOVER_MIN_LEN]
+    rescued, tries = [], 0
+    while todo and tries < LEFTOVER_MAX_TRIES:
+        a, b = todo.pop(0)
+        for x, y in leftover_candidates(cols, a, b):
+            if tries >= LEFTOVER_MAX_TRIES:
+                break
+            tries += 1
+            run_txt = ''.join(p['txt'] for p in proxies[x:y])
+            m2 = find_best_match(run_txt, ref_txt)[0].strip('\n')
+            if not m2 or m2 in first_match or any(m2 in r[2] for r in rescued):  # 没找到，或就是已经用过的那段
+                continue
+            if get_match_info(run_txt, m2)['status'] < 3:
+                continue
+            rescued.append((x, y, m2))
+            todo += [(u, v) for u, v in ((a, x), (y, b)) if v - u >= LEFTOVER_MIN_LEN]  # 剩下的两头还可以再找
+            break
     if not rescued:
         return first_match, 0, []
-    return assemble_match_txt(cmps, segments, rescued), sum(b - a for n, (_, a, b) in enumerate(segments) if n in rescued), found
+    return (assemble_match_txt(cmps, segments, rescued), sum(y - x for x, y, _ in rescued),
+            [m for _, _, m in sorted(rescued)])
 
 
 def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, force=False, spans=None):

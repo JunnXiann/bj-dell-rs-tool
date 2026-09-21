@@ -252,3 +252,54 @@ def test_z1_z2_share_the_sx_yinshi_reel_listed_on_only_one_of_them():
     # 只有z1存在于库里时不受影响
     windows, _ = my.build_yinshi_windows(rows, {'FZ0033_001z1': '音释'})
     assert windows['FZ0033_001z1']['sx_reels'] == sx
+
+
+def test_leftover_segments_and_assemble_keep_target_order():
+    cmps = ['甲', '乙', '■', '■', None, '丙']
+    segs = my.leftover_segments(cmps)
+    assert segs == [(False, 0, 2), (True, 2, 5), (False, 5, 6)]
+    assert my.assemble_match_txt(cmps, segs, []) == '甲乙\n丙'  # 没补找到的字略去
+    assert my.assemble_match_txt(cmps, segs, [(2, 5, '丁戊己')]) == '甲乙\n丁戊己\n丙'  # 补找到的按目标字的位置放回
+
+
+def test_leftover_candidates_start_and_end_on_column_boundaries_longest_first():
+    cols = ['c1'] * 4 + ['c2'] * 12 + ['c3'] * 11  # 字0-3在第1列，4-15在第2列，16-26在第3列
+    cands = my.leftover_candidates(cols, 2, 27)
+    assert cands[0] == (2, 27)  # 整段最先
+    assert (4, 27) in cands and (4, 16) in cands and (16, 27) in cands
+    assert all(y - x >= my.LEFTOVER_MIN_LEN for x, y in cands)
+    assert (2, 4) not in cands and (2, 16) in cands
+    assert [y - x for x, y in cands] == sorted((y - x for x, y in cands), reverse=True)
+
+
+# FZ1280：思溪藏页是A块在前、B块在后，福州藏页里B块在标题前、A块在后
+SX_A = ['狹𬾃夾反俓直上古定反靣𤿥下側瘦反皮蹙也𮊵弱上力垂反', '下音若喘息上尺軟反泯絶上免忍反迅捷上私閏反下慈𫟒反詮', '七全反倉廪下吕錦反雲翳一反計障馭音御']
+SX_B = ['求𠣏下音蓋乞也財賄下呼毎反顒忘恭反耆年上渠夷反老也', '衰邁上所追反下莫敗反']
+FZ_B = ['求𠣏下音蓋乞也財賄下呼毎反顒愚恭反耆年上渠夷反老也', '𮕱邁上所追反下莫敗反']
+FZ_A = ['狹𬾃夾反俓直上古定反靣𤿥下側瘦反皮蹙也𮊵弱上力垂反', '下音若喘息上尺軟反泯絶上免忍反迅捷上私閏反下慈𫟒反詮',
+        '七全反倉廪下吕錦反糧斛上音良丨食下胡谷反丨斗雲翳下計', '反丨障馭音御']
+
+
+def test_match_target_finds_the_chunk_that_is_in_a_different_order():
+    page = make_page('SX_510_10_90', list(enumerate(SX_A + SX_B, 1)))
+    t = {'page': page, 'idx': set(range(len(page['chars']))), 'methods': {'E'}}
+    ref = '\n'.join(FZ_B + ['決定義經'] + FZ_A)
+    spans = [(0, len(ref), 'FZ_1279_1_27', ['FZ1280_001z1'])]
+    row, log = my._match_target('FZ1280_001z1', 'SX_510_10_90', t, ref, {}, 'fz_yinshi_scoped', ['FZ1280_001z1'],
+                                spans=spans)
+    n_b = sum(len(x) for x in SX_B)
+    assert row['leftover_chars'] >= n_b and log['leftover_chars'] == row['leftover_chars']
+    assert row['status'] >= 4 and row['r_hit2base'] > 0.9  # 只做首次匹配时是status 3、0.577
+    assert row['source_pages'] == 'FZ_1279_1_27' and 'leftover pass' in row['note']
+    # B块的字这次都有对应的字，不再是■
+    status, ordered, proxies = my._fill_cmp(page, t, 'fz_yinshi_scoped', {}, log=log)
+    tail = [p['cmp_txt'] for p in proxies][-n_b:]
+    assert status == 'ok' and '■' not in tail and ''.join(tail) == ''.join(FZ_B)
+
+
+def test_match_target_without_leftover_is_unchanged():
+    page = make_page('SX_510_10_90', list(enumerate(SX_A + SX_B, 1)))
+    t = {'page': page, 'idx': set(range(len(page['chars']))), 'methods': {'E'}}
+    ref = '\n'.join(['決定義經'] + FZ_A + FZ_B)  # 顺序一致
+    row, log = my._match_target('FZ1280_001z1', 'SX_510_10_90', t, ref, {}, 'fz_yinshi_scoped', ['FZ1280_001z1'])
+    assert 'leftover_chars' not in row and 'leftover_chars' not in log
