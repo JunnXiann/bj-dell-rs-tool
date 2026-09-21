@@ -350,6 +350,35 @@ def test_page_status_summary_counts_before_and_after():
             {'page_change': 'improved', 'page_status_before': '', 'page_status_after': 3,
              'page_r_similar_before': '', 'page_r_similar_after': 0.6},
             {'page': 'no comparison for this row'}]
-    before, after, improved, total, avg_b, avg_a = my.page_status_summary(rows)
-    assert (before, after, improved, total) == ('4:1 3:1 -:1', '4:2 3:1', 2, 3)
+    before, after, improved, total, avg_b, avg_a, applied = my.page_status_summary(rows)
+    assert (before, after, improved, total, applied) == ('4:1 3:1 -:1', '4:2 3:1', 2, 3, 3)
     assert (avg_b, avg_a) == (0.467, 0.8)
+    rows.append({'page_change': 'not applied', 'page_status_before': 2, 'page_status_after': 2,
+                 'page_r_similar_before': 0.1, 'page_r_similar_after': 0.1})
+    assert my.page_status_summary(rows)[3:7:3] == (4, 3)  # 4页参与统计，其中3页会填入cmp_txt
+
+
+def test_make_run_flag_is_date_plus_three_digit_sequence():
+    from datetime import datetime
+    day = datetime(2026, 9, 21)
+    assert my.make_run_flag(day) == 21092026001
+    assert my.make_run_flag(day, 21092026001) == 21092026002
+    assert my.make_run_flag(day, 21092026009) == 21092026010
+    assert my.make_run_flag(day, 20260206002) == 21092026001  # 别的日期或别的格式的标记不影响今天的序号
+    assert my.make_run_flag(datetime(2026, 9, 1)) == 1092026001  # 日期开头的0不保留，也不会与其它日期混淆
+    try:
+        my.make_run_flag(day, 21092026999)
+        assert False
+    except ValueError:
+        pass
+
+
+def test_page_match_change_ignores_the_length_of_an_unrelated_earlier_match_text():
+    # 整页原来的匹配(状态2)找到的是一段不相干的文本，长度是整页的1.3倍；音释匹配命中了近九成。
+    # 把两段匹配文本的长度相加会是2.2倍，被当成“匹配文本太长”而仍是状态2
+    prev = {'index_id': 'jsz-ik', 'status': 2, 'len_base_txt': 200, 'len_hit': 20, 'len_similar': 8,
+            'len_match_txt': 260, 'r_hit2base': 0.1, 'r_similar2base': 0.04, 'r_match2base': 1.3}
+    page = {'name': 'SX_1_1_1', 'match_logs': [prev], 'match': prev, 'base_txt': '字' * 200, 'chars': [], 'columns': []}
+    r = my.page_match_change(page, 'fz_yinshi_scoped', {'len_hit': 180, 'len_similar': 176, 'len_match_txt': 185}, True)
+    assert (r['page_status_before'], r['page_status_after'], r['page_change']) == (2, 4, 'improved')
+    assert r['page_r_hit_after'] == 1.0 and r['page_r_similar_after'] == 0.92
