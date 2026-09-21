@@ -614,3 +614,93 @@ def test_flag_e_undo_can_restore_the_plain_flag_field_but_not_arbitrary_fields()
         assert False
     except ValueError:
         pass
+
+
+def status_page(name, status=None, similar=0.5):
+    """ 只带整页匹配的页：cbeta整页匹配，状态status(None=完全没有匹配)"""
+    if status is None:
+        return {'name': name, 'match_logs': [], 'base_txt': '正文' * 50}
+    log = {'index_id': 'jsz-ik', 'status': status, 'len_base_txt': 100, 'r_hit2base': similar, 'r_similar2base': similar}
+    return {'name': name, 'match_logs': [log], 'match': log, 'base_txt': '正文' * 50}
+
+
+def page_status_fixture():
+    """ 五页含E：a匹配后升级(preview报告里有)、b匹配了但不填、c在对照表里但没有匹配结果、d不在对照表、e库里没有"""
+    epages = {'SX_1_1_1': ['SX0001_001'], 'SX_1_1_2': ['SX0001_001'], 'SX_1_1_3': ['SX0001_001'],
+              'SX_2_1_1': ['SX0002_001'], 'SX_2_1_2': ['SX0002_001']}
+    rows = [
+        {'page': 'SX_1_1_1', 'status': 5, 'page_change': 'improved', 'page_status_before': 3, 'page_status_after': 4},
+        {'page': 'SX_1_1_2', 'status': 2, 'page_change': 'not applied', 'page_status_before': 3, 'page_status_after': 3},
+        {'page': 'SX_1_1_3', 'action': 'no_match_txt'},
+        {'job': 'FZ0001_010z1', 'action': 'no_reference'},  # 没有页的行忽略
+    ]
+    docs = {'SX_1_1_3': status_page('SX_1_1_3', 4), 'SX_2_1_1': status_page('SX_2_1_1')}  # SX_2_1_2没有页数据
+    return epages, rows, docs
+
+
+def test_combine_page_status_covers_every_yinshi_page_not_just_the_matched_ones():
+    table = {r['page']: r for r in my.combine_page_status(*page_status_fixture(), 'fz_yinshi_scoped')}
+    assert list(table) == ['SX_1_1_1', 'SX_1_1_2', 'SX_1_1_3', 'SX_2_1_1', 'SX_2_1_2']
+    assert [table[p]['coverage'] for p in table] == ['applied', 'not_applied', 'no_match', 'not_in_sheet', 'no_page']
+    assert (table['SX_1_1_1']['page_status_before'], table['SX_1_1_1']['page_status_after']) == (3, 4)
+    # 对照表范围内但没匹配结果：读库里原有的整页匹配，前后一样
+    assert (table['SX_1_1_3']['page_status_before'], table['SX_1_1_3']['page_status_after'],
+            table['SX_1_1_3']['note']) == (4, 4, 'no_match_txt')
+    assert table['SX_1_1_3']['page_match_from'] == 'jsz-ik' and table['SX_1_1_3']['sutra'] == 'SX0001'
+    # 不在对照表、原来完全没有整页匹配：状态为空('-')，前后都一样
+    assert (table['SX_2_1_1']['page_status_before'], table['SX_2_1_1']['page_status_after']) == ('', '')
+    assert 'page_change' not in table['SX_2_1_2']  # 库里没有的页不进前后分布
+
+
+def test_unchanged_page_status_ignores_the_tools_own_earlier_log():
+    page = status_page('SX_1_1_1', 3, 0.6)
+    page['match_logs'].append({'index_id': 'fz_yinshi_scoped', 'status': 5, 'r_similar2base': 1.0})  # 上次match写的，不算
+    r = my.unchanged_page_status(page, 'fz_yinshi_scoped')
+    assert (r['page_status_before'], r['page_status_after'], r['page_change']) == (3, 3, 'unchanged')
+    assert r['page_r_similar_before'] == 0.6 and r['page_chars'] == 100
+
+
+def test_names_to_lookup_skips_pages_the_preview_already_compared():
+    epages, rows, _ = page_status_fixture()
+    assert my.names_to_lookup(epages, rows) == ['SX_1_1_3', 'SX_2_1_1', 'SX_2_1_2']
+
+
+def test_status_transitions_and_summary_lines():
+    table = my.combine_page_status(*page_status_fixture(), 'fz_yinshi_scoped')
+    assert my.status_transitions(table) == {('3', '4'): 1, ('3', '3'): 1, ('4', '4'): 1, ('-', '-'): 1}
+    head = '\n'.join(my.page_status_head(table, 'tw-prod-readonly', '^SX'))
+    assert 'pages=5' in head and 'improved 1 pages' in head and '3 -> 4 : 1  (changed)' in head
+    assert '- -> - : 1' in head and 'no_page' in head
+    by = {r['sutra']: r for r in my.summarize_page_status_by_sutra(table)}
+    assert by['SX0001']['pages'] == 3 and by['SX0001']['applied'] == 1 and by['SX0002']['not_in_sheet'] == 1
+
+
+def test_run_page_status_from_a_preview_csv_reads_only_the_other_pages():
+    import helper, glob, tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        check_run_page_status(tmp)
+
+
+def check_run_page_status(tmp_path):
+    import helper, glob
+    tmp_path = __import__('pathlib').Path(tmp_path)
+    epages, rows, docs = page_status_fixture()
+    reels = [{'reel_code': 'SX0001_001', 'format': [{'name': n, 'columns': [['E', 1]], 'chars': []}
+                                                    for n in ('SX_1_1_1', 'SX_1_1_2', 'SX_1_1_3')]},
+             {'reel_code': 'SX0002_001', 'format': [{'name': n, 'columns': [['E', 1]], 'chars': []}
+                                                    for n in ('SX_2_1_1', 'SX_2_1_2')]}]
+    db = FlagFakeDb(reels, list(docs.values()))
+    csv_path = str(tmp_path / 'pages.csv')
+    my.write_csv(csv_path, rows, ['job', 'page', 'status', 'action'] + my.PAGE_MATCH_FIELDS)
+    saved = helper.get_db, helper.set_logging
+    helper.get_db, helper.set_logging = (lambda db_id: db), (lambda *a, **k: None)
+    try:
+        my.run_page_status(pages_csv=csv_path, report_dir=str(tmp_path))
+    finally:
+        helper.get_db, helper.set_logging = saved
+    out = glob.glob(str(tmp_path / 'page_status-*'))[0]
+    import csv as csvmod
+    table = {r['page']: r for r in csvmod.DictReader(open(out + '/pages_all.csv', encoding='utf-8-sig'))}
+    assert len(table) == 5 and table['SX_1_1_1']['coverage'] == 'applied'
+    assert table['SX_1_1_1']['page_status_after'] == '4' and table['SX_2_1_1']['coverage'] == 'not_in_sheet'
+    assert 'improved 1 pages' in open(out + '/summary.txt', encoding='utf-8').read()

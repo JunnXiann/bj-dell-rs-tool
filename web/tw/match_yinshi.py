@@ -8,6 +8,7 @@
 
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
     python match_yinshi.py preview [--sutra=FZ0002] [--direction=fz2sx|sx2fz] [--db=...]   # 只读，出报告；不填sutra=全部经
+    python match_yinshi.py page_status [--pages_csv=data/yinshi_match/preview_sx2fz_all-xxx/pages.csv] [--db=...]   # 只读，所有SX音释页整页状态前后对比
     python match_yinshi.py flag_e --value=20260921111 [--field=flag1] [--reel_regex=^FZ] [--keep_existing] [--not_flag3_date=20260921] [--commit]   # 给思溪藏所有含E格式的页打标记，默认只动SX
     python match_yinshi.py flag_e_undo --report=data/yinshi_match/flag_e-xxx.csv --field=flag1 --value=20260921111 [--commit]   # 按flag_e的报告恢复原值
     python match_yinshi.py plan  [--with_counts]
@@ -646,6 +647,16 @@ PAGE_MATCH_FIELDS = ['page_chars', 'page_match_from', 'page_status_before', 'pag
                       'page_r_hit_before', 'page_r_hit_after', 'page_r_similar_before', 'page_r_similar_after']
 
 
+def _prev_page_match(page, index_id):
+    """ 页原有的整页匹配：match_logs里最好的一条(不算本工具写的index_id)，没有日志时用page.match；都没有返回{}"""
+    from web.tw.match import get_best_match
+    others = [dict(x) for x in page.get('match_logs') or [] if x.get('index_id') != index_id]
+    prev = get_best_match(others)
+    if not prev and isinstance(page.get('match'), dict) and page['match'].get('index_id') != index_id:
+        prev = dict(page['match'])
+    return prev or {}
+
+
 def page_match_change(page, index_id, log, applied):
     """ 整页匹配状态在补上音释比对文本前后的对比，不写库
     整页状态(page.match)是各条match_logs里最好的一条，每条都拿整页文本去比：思溪藏页的音释字不在cbeta里，
@@ -657,11 +668,7 @@ def page_match_change(page, index_id, log, applied):
     返回PAGE_MATCH_FIELDS里的字段
     """
     from web.tw.match import get_best_match, get_status
-    others = [dict(x) for x in page.get('match_logs') or [] if x.get('index_id') != index_id]
-    prev = get_best_match(others)
-    if not prev and isinstance(page.get('match'), dict) and page['match'].get('index_id') != index_id:
-        prev = dict(page['match'])
-    prev = prev or {}
+    prev = _prev_page_match(page, index_id)
     base_len = prev.get('len_base_txt') or len(_select_all(page))
 
     def count(d, key, ratio_key):  # 字数：优先用记录里的字数，没有就用比例推算
@@ -978,6 +985,7 @@ def run_preview(sutra='', direction=DEFAULT_DIRECTION, db='tw-test-readonly', mi
                 rows.append({'sutra': _sutra_of(job), 'job': job['id'], 'action': 'job_error', 'note': str(e)})
     finally:
         write_outputs()
+    return rows
 
 
 def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats, direction=DEFAULT_DIRECTION, overwrite=False):
@@ -1031,6 +1039,166 @@ def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats
         out += ['', head + ' | same=%s placeholder(■)=%s other-diff=%s' % (n_same, n_ph, row['n_diff'])]
         if detail:
             out += render_page_view(page, t, vdict, cmp_by_idx)
+
+PAGE_STATUS_FIELDS = ['sutra', 'page', 'reels', 'coverage', 'yinshi_status'] + PAGE_MATCH_FIELDS + ['note']
+COVERAGES = ('applied', 'not_applied', 'no_match', 'not_in_sheet', 'no_page')
+
+
+def load_report_rows(csv_path):
+    """ 读回preview的pages.csv，数字列还原成数字(csv里都是文本)，其它保持文本"""
+    def num(v):
+        try:
+            return int(v)
+        except ValueError:
+            try:
+                return float(v)
+            except ValueError:
+                return v
+    with open(csv_path, encoding='utf-8-sig', newline='') as f:
+        rows = list(csv.DictReader(f))
+    for r in rows:
+        for k in ['status'] + PAGE_MATCH_FIELDS:
+            if r.get(k) not in (None, '') and k not in ('page_match_from', 'page_change'):
+                r[k] = num(r[k])
+    return rows
+
+
+def unchanged_page_status(page, index_id):
+    """ 没有音释匹配(或没填cmp_txt)的页：整页状态前后一样，就是页原有的整页匹配"""
+    prev = _prev_page_match(page, index_id)
+    pick = lambda k: prev[k] if prev.get(k) is not None else ''
+    return {'page_chars': prev.get('len_base_txt') or len(page.get('base_txt') or ''),
+            'page_match_from': prev.get('index_id') or '',
+            'page_status_before': pick('status'), 'page_status_after': pick('status'), 'page_change': 'unchanged',
+            'page_r_hit_before': pick('r_hit2base'), 'page_r_hit_after': pick('r_hit2base'),
+            'page_r_similar_before': pick('r_similar2base'), 'page_r_similar_after': pick('r_similar2base')}
+
+
+def names_to_lookup(epages, rows):
+    """ 还要读库才知道整页状态的页：有E格式，但preview的报告里没有整页前后对比的页"""
+    done = {r['page'] for r in rows if r.get('page') and r.get('page_change')}
+    return sorted(set(epages) - done)
+
+
+def combine_page_status(epages, rows, docs, index_id):
+    """ 所有含音释页的整页状态前后对比，每页一行(PAGE_STATUS_FIELDS)。
+    epages：{页名: [卷编码]}(flag_e找到的页)；rows：preview对照表内页的报告行；docs：报告里没有对比的页读库得到的页数据
+    coverage：applied=音释匹配够好会填cmp_txt，整页状态按补上后重算；not_applied=匹配了但状态低于min_status，不填；
+    no_match=在对照表范围内但没有匹配结果；not_in_sheet=不在对照表范围内，整页状态不变；no_page=库里没有这页
+    """
+    import helper as hlp
+    by_page = {r['page']: r for r in rows if r.get('page')}
+    table = []
+    for name in sorted(set(epages) | set(by_page), key=hlp.align_code):
+        r = by_page.get(name) or {}
+        reels = ','.join(epages.get(name, []))
+        item = {'sutra': reels.split('_')[0] if reels else '', 'page': name, 'reels': reels,
+                'yinshi_status': r.get('status', '')}
+        if r.get('page_change'):
+            item.update({k: r.get(k, '') for k in PAGE_MATCH_FIELDS},
+                        coverage='not_applied' if r['page_change'] == 'not applied' else 'applied')
+        elif name in docs:
+            item.update(unchanged_page_status(docs[name], index_id), coverage='no_match' if r else 'not_in_sheet',
+                        note=r.get('action', ''))
+        else:
+            item.update(coverage='no_page', note='page not in DB')
+        table.append(item)
+    return table
+
+
+def status_transitions(table):
+    """ 整页状态(前, 后)的页数：{('4', '5'): 12}，'-'是没有整页匹配。只统计有状态对比的页"""
+    out = {}
+    for r in table:
+        if r.get('page_change'):
+            key = tuple('-' if r[k] == '' else str(r[k]) for k in ('page_status_before', 'page_status_after'))
+            out[key] = out.get(key, 0) + 1
+    return out
+
+
+def page_status_head(table, db, reel_regex):
+    """ summary.txt的内容：总览、按coverage分的前后分布、状态转移表"""
+    total = page_status_summary(table)
+    lines = ['page_status  db=%s  yinshi (E) pages in reels matching %r  (read-only, nothing written)' % (db, reel_regex),
+             'pages=%s  whole-page status before -> after: %s -> %s; improved %s pages; avg whole-page similar2base %s -> %s' % (
+                 len(table), total[0] or '-', total[1] or '-', total[2], total[4], total[5]),
+             'whole-page status: 0 = too short to search, 1 = nothing found, 2 = no match, 3 = medium, 4 = high, '
+             '5 = exact; "-" = no whole-page match at all',
+             'coverage: applied = yinshi cmp_txt would be filled, status recalculated with it; not_applied = yinshi matched '
+             'but below --min_status; no_match = inside the sheet but no yinshi match; not_in_sheet = not covered by the '
+             'sheets, unchanged; no_page = not in the DB', '', 'by coverage:']
+    for c in COVERAGES:
+        rs = [r for r in table if r['coverage'] == c]
+        if rs:
+            s = page_status_summary(rs)
+            lines.append('  %-12s %6s pages  %s -> %s  improved %s' % (c, len(rs), s[0] or '-', s[1] or '-', s[2]))
+    lines += ['', 'status transitions (before -> after: pages):']
+    order = lambda x: -1 if x == '-' else int(x)
+    for (b, a), n in sorted(status_transitions(table).items(), key=lambda kv: (-order(kv[0][0]), -order(kv[0][1]))):
+        lines.append('  %s -> %s : %s%s' % (b, a, n, '' if b == a else '  (changed)'))
+    return lines
+
+
+def summarize_page_status_by_sutra(table):
+    """ 按思溪藏经号汇总"""
+    groups = {}
+    for r in table:
+        groups.setdefault(r['sutra'], []).append(r)
+    out = []
+    for sutra, rs in sorted(groups.items()):
+        s = page_status_summary(rs)
+        out.append(dict({'sutra': sutra, 'pages': len(rs)},
+                        **{c: sum(1 for r in rs if r['coverage'] == c) for c in COVERAGES},
+                        page_status_before=s[0], page_status_after=s[1], pages_improved=s[2],
+                        avg_page_similar_before=s[4], avg_page_similar_after=s[5]))
+    return out
+
+
+def run_page_status(min_status=3, db='tw-test-readonly', pages_csv='', reel_regex=SX_REEL_REGEX, mapping=MAPPING_XLSX,
+                    report_dir=REPORT_DIR):
+    """ 所有思溪藏音释(E)页的整页匹配状态，补上福州藏音释比对文本前后的对比。全程只读库，不写库。
+    不限于对照表里、匹配上、填了cmp_txt的页：库里所有含E格式的SX页都在表里(与flag_e找的页一样)。
+    对照表范围内的页要试跑匹配才知道补上后的状态(库里没存)，其它页没有音释匹配，整页状态前后一样，读库里原有的匹配。
+    pages_csv：以前跑过的sx2fz preview的pages.csv路径，给了就直接用它的结果，不再试跑匹配(只读少量库)，快很多；
+    不给就现跑一遍sx2fz preview(同样只读，也会输出它自己的报告)
+    min_status：现跑时用，与preview一致，状态低于它的页不算填cmp_txt
+    reel_regex：哪些卷的E页，默认只看思溪藏
+    输出目录 report_dir/page_status-<时间>/：summary.txt(总览、状态转移)、pages_all.csv(每页一行)、by_sutra.csv(每经一行)
+    """
+    import helper as hlp
+    hlp.set_logging('match_yinshi')
+    index_id = DIRECTIONS['sx2fz']['index_id']
+    dbh = hlp.get_db(db)
+    if pages_csv:
+        rows = load_report_rows(pages_csv)
+        logging.info('%s preview rows read from %s' % (len(rows), pages_csv))
+    else:
+        rows = run_preview(direction='sx2fz', db=db, min_status=min_status, detail=False, mapping=mapping,
+                           report_dir=report_dir) or []
+    epages = find_e_pages(dbh, reel_regex)
+    need = names_to_lookup(epages, rows)
+    logging.info('%s pages with E format, %s of them need a DB read for their whole-page match' % (len(epages), len(need)))
+    docs = {}
+    fields = {'name': 1, 'match': 1, 'match_logs': 1, 'base_txt': 1}
+    for i in range(0, len(need), 500):
+        chunk = need[i:i + 500]
+        docs.update({d['name']: d for d in _with_retry(
+            lambda: list(dbh.page.find({'name': {'$in': chunk}}, fields)))})
+    table = combine_page_status(epages, rows, docs, index_id)
+
+    out_dir = path.join(report_dir, 'page_status-%s' % datetime.now().strftime('%Y%m%d-%H%M%S'))
+    head = page_status_head(table, db, reel_regex)
+    os.makedirs(out_dir, exist_ok=True)
+    with open(path.join(out_dir, 'summary.txt'), 'w', encoding='utf-8') as f:
+        f.write('\n'.join(head) + '\n')
+    write_csv(path.join(out_dir, 'pages_all.csv'), table, PAGE_STATUS_FIELDS)
+    write_csv(path.join(out_dir, 'by_sutra.csv'), summarize_page_status_by_sutra(table),
+              ['sutra', 'pages'] + list(COVERAGES) + ['page_status_before', 'page_status_after', 'pages_improved',
+                                                    'avg_page_similar_before', 'avg_page_similar_after'])
+    for line in head:
+        logging.info(line)
+    logging.info('reports in %s' % out_dir)
+
 
 def check_flag_field(field, allow_plain=False):
     """ 打标记只允许flag1、flag2、flag3这类批次标记字段。平台用flag(无数字)表示页的处理阶段并据此选页(如flag=717)，
@@ -1194,4 +1362,4 @@ if __name__ == '__main__':
     import fire
 
     fire.Fire({'plan': run_plan, 'match': run_match, 'apply': run_apply, 'preview': run_preview, 'flag_e': run_flag_e,
-               'flag_e_undo': run_flag_e_undo})
+               'flag_e_undo': run_flag_e_undo, 'page_status': run_page_status})
