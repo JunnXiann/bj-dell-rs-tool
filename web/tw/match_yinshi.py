@@ -7,10 +7,10 @@
     sx2fz        思溪藏音释字(E格式)获得cmp_txt，参考文本来自福州藏z卷的音释
 
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
-    python match_yinshi.py preview --sutra=FZ0002 [--direction=fz2sx|sx2fz] [--db=...]   # 只读，输出逐页逐列对照
+    python match_yinshi.py preview [--sutra=FZ0002] [--direction=fz2sx|sx2fz] [--db=...]   # 只读，出报告；不填sutra=全部经
     python match_yinshi.py plan  [--with_counts]
     python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit] [--force] [--set_page_match]
-    python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--commit]
+    python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--overwrite] [--commit]
 
 两个xlsx被.gitignore忽略，需手工拷到本目录：福州藏vs思溪藏卷编码.xlsx、福州藏音释卷编码.xlsx
 """
@@ -19,6 +19,7 @@ import os
 import sys
 import csv
 import json
+import time
 import logging
 import os.path as path
 from datetime import datetime
@@ -271,22 +272,41 @@ def load_existing_z_reels(db):
     return {r['reel_code']: r.get('reel_type') for r in db.reel.find(cond, {'reel_code': 1, 'reel_type': 1})}
 
 
+def _with_retry(fn, tries=3):
+    """ 读库偶尔会因网络(如ssh隧道)断开而失败，重试几次；只用于只读查询"""
+    from pymongo.errors import PyMongoError
+    for k in range(tries):
+        try:
+            return fn()
+        except PyMongoError as e:
+            if k == tries - 1:
+                raise
+            logging.warning('db read failed (%s), retry %s/%s' % (e.__class__.__name__, k + 1, tries - 1))
+            time.sleep(2 * (k + 1))
+
+
+# 只取匹配用到的字段：字数组里有坐标等大量字段，全取会让每页数据大几倍。数组元素个数和顺序不变，下标仍可用于写库
+PAGE_FIELDS = {'name': 1, 'match_logs': 1, 'chars.char_id': 1, 'chars.cid': 1, 'chars.txt': 1, 'chars.cmp_txt': 1,
+               'chars.deleted': 1, 'columns.column_id': 1, 'columns.cid': 1, 'columns.is_center': 1,
+               'columns.deleted': 1}
+
+
 def load_reel(db, reel_code):
     fields = ['reel_code', 'reel_type', 'format', 'start_volume', 'start_page', 'end_volume', 'end_page']
-    return db.reel.find_one({'reel_code': reel_code}, {f: 1 for f in fields})
+    return _with_retry(lambda: db.reel.find_one({'reel_code': reel_code}, {f: 1 for f in fields}))
 
 
 def load_reel_pages(db, reel):
     import helper as hlp
     from web.tw.reel import get_page_select_cond
-    pages = list(db.page.find(get_page_select_cond(reel), {'name': 1, 'chars': 1, 'columns': 1, 'match_logs': 1}))
+    pages = _with_retry(lambda: list(db.page.find(get_page_select_cond(reel), PAGE_FIELDS)))
     pages.sort(key=lambda p: hlp.align_code(p['name']))
     return pages
 
 
 def collect_yinshi(db, reel_codes, vdict):
     """ 收集若干卷的音释字，按页合并（两卷共用的页只保留一份，字取并集）
-    返回({页名: {'page', 'idx': set, 'methods': set}}, {卷编码: 音释字数})
+    返回({页名: {'page', 'idx': set, 'methods': set, 'reels': set}}, {卷编码: 音释字数})
     """
     targets, counts = {}, {}
     for code in reel_codes:
@@ -295,9 +315,11 @@ def collect_yinshi(db, reel_codes, vdict):
         if not reel or reel.get('reel_type') in EMPTY_REEL_TYPES:
             continue
         for sel in select_reel_yinshi(reel, load_reel_pages(db, reel), vdict):
-            t = targets.setdefault(sel['page']['name'], {'page': sel['page'], 'idx': set(), 'methods': set()})
+            t = targets.setdefault(sel['page']['name'],
+                                   {'page': sel['page'], 'idx': set(), 'methods': set(), 'reels': set()})
             t['idx'].update(sel['idx'])
             t['methods'].add(sel['method'])
+            t['reels'].add(code)
             counts[code] += len(sel['idx'])
     return targets, counts
 
@@ -308,10 +330,18 @@ def sorted_page_names(targets):
 
 
 def build_reference_txt(db, reel_codes, vdict):
-    """ 参考文本：各卷音释文本按阅读顺序拼接。返回(文本, {卷编码: 音释字数})"""
+    """ 参考文本：各卷音释文本按阅读顺序拼接，页与页之间用换行隔开
+    返回(文本, {卷编码: 音释字数}, [(起点, 终点, 页名, [卷编码])])，后者标出文本各段来自哪一页哪一卷
+    """
     targets, counts = collect_yinshi(db, reel_codes, vdict)
-    texts = [page_text(targets[n]['page'], targets[n]['idx'], vdict)[0] for n in sorted_page_names(targets)]
-    return '\n'.join(texts), counts
+    texts, spans, offset = [], [], 0
+    for name in sorted_page_names(targets):
+        t = targets[name]
+        txt = page_text(t['page'], t['idx'], vdict)[0]
+        texts.append(txt)
+        spans.append((offset, offset + len(txt), name, sorted(t['reels'])))
+        offset += len(txt) + 1
+    return '\n'.join(texts), counts, spans
 
 
 # endregion
@@ -413,17 +443,90 @@ def _own_log(page, index_id):
     return next((l for l in page.get('match_logs') or [] if l.get('index_id') == index_id), None)
 
 
-REPORT_FIELDS = ['job', 'page', 'method', 'n_chars', 'status', 'r_hit2base', 'r_similar2hit', 'r_similar2base',
-                 'len_match_txt', 'action', 'note']
+def locate_source(ref_txt, spans, match_txt):
+    """ 匹配文本来自参考文本的哪些页。返回([(页名, [卷编码])], 备注)；找不到位置时返回([], 原因)
+    匹配文本通常是参考文本的原样摘录，直接查找；含■占位等不能原样找到时，退回模糊定位
+    """
+    m = (match_txt or '').strip('\n')
+    if not m:
+        return [], 'no match text'
+    start = ref_txt.find(m)
+    note = ''
+    if start >= 0:
+        end = start + len(m)
+        if ref_txt.count(m) > 1:
+            note = 'same text appears %s times in the reference' % ref_txt.count(m)
+    else:
+        from rapidfuzz import fuzz
+        al = fuzz.partial_ratio_alignment(m, ref_txt)
+        if al is None or al.score < 60:
+            return [], 'source not located'
+        start, end, note = al.dest_start, al.dest_end, 'source located by fuzzy search'
+    return [(name, reels) for a, b, name, reels in spans if a < end and b > start], note
 
 
-def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, force=False):
-    """ 为一页目标音释字在参考文本里查找匹配。返回(报告行, match_log或None)，不写库"""
+def _source_fields(hit):
+    reels = sorted({r for _, rs in hit for r in rs})
+    return {'source_reels': ','.join(reels), 'source_pages': ','.join(name for name, _ in hit)}
+
+
+REPORT_FIELDS = ['sutra', 'job', 'reference', 'page', 'method', 'n_chars', 'status', 'r_hit2base', 'r_similar2hit',
+                 'r_similar2base', 'len_match_txt', 'found_by', 'source_reels', 'source_pages', 'source_note',
+                 'applied', 'n_same', 'n_placeholder', 'n_diff', 'action', 'note', 'target_txt', 'match_txt']
+SUMMARY_FIELDS = ['sutra', 'jobs', 'empty_jobs', 'reference', 'pages', 'status_5', 'status_4', 'status_3', 'status_2',
+                  'no_status', 'avg_hit2base', 'avg_similar2hit', 'chars', 'same', 'placeholder', 'diff', 'pct_same',
+                  'review_pages']
+
+
+def summarize_sutras(rows):
+    """ 按经汇总页级结果：各状态的页数、平均匹配率、填充字数，以及需要人工看的页(状态2、无状态)
+    rows是各页的报告行(REPORT_FIELDS)，没有sutra的行忽略
+    """
+    groups = {}
+    for r in rows:
+        if r.get('sutra'):
+            groups.setdefault(r['sutra'], []).append(r)
+    out = []
+    for sutra, rs in groups.items():
+        with_status = [r for r in rs if r.get('status')]
+        rated = [r for r in with_status if r.get('r_hit2base') is not None]  # 跳过已完成的页没有匹配率
+        n = len(rated)
+        same = sum(r.get('n_same') or 0 for r in rs)
+        ph = sum(r.get('n_placeholder') or 0 for r in rs)
+        diff = sum(r.get('n_diff') or 0 for r in rs)
+        out.append({
+            'sutra': sutra,
+            'jobs': ','.join(dict.fromkeys(r['job'] for r in rs if r.get('job'))),
+            'empty_jobs': ','.join(dict.fromkeys(
+                '%s(%s)' % (r['job'], r['action']) for r in rs
+                if r.get('action') in ('no_target', 'no_reference', 'job_error'))),
+            'reference': ' | '.join(dict.fromkeys(r['reference'] for r in rs if r.get('reference'))),
+            'pages': len([r for r in rs if r.get('page')]),
+            'status_5': sum(1 for r in with_status if r['status'] == 5),
+            'status_4': sum(1 for r in with_status if r['status'] == 4),
+            'status_3': sum(1 for r in with_status if r['status'] == 3),
+            'status_2': sum(1 for r in with_status if r['status'] == 2),
+            'no_status': len([r for r in rs if r.get('page') and not r.get('status')]),
+            'avg_hit2base': round(sum(r['r_hit2base'] for r in rated) / n, 3) if n else '',
+            'avg_similar2hit': round(sum(r['r_similar2hit'] or 0 for r in rated) / n, 3) if n else '',
+            'chars': sum(r.get('n_chars') or 0 for r in rs),
+            'same': same, 'placeholder': ph, 'diff': diff,
+            'pct_same': round(100.0 * same / (same + ph + diff), 1) if same + ph + diff else '',
+            'review_pages': ','.join(r['page'] for r in rs if r.get('page') and (r.get('status') or 0) < 3),
+        })
+    return out
+
+
+def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, force=False, spans=None):
+    """ 为一页目标音释字在参考文本里查找匹配。返回(报告行, match_log或None)，不写库
+    spans是build_reference_txt给出的各页位置，有则在报告和日志里记下匹配文本来自参考的哪些页/卷
+    """
     from util.find_match import find_best_match
     from web.tw.match import get_match_info
     page = t['page']
     base_txt, ordered = page_text(page, t['idx'], vdict)
-    row = {'job': job_id, 'page': name, 'method': ','.join(sorted(t['methods'])), 'n_chars': len(ordered)}
+    row = {'sutra': job_id.split('_')[0], 'job': job_id, 'reference': _span(reference_reels), 'page': name,
+           'method': ','.join(sorted(t['methods'])), 'n_chars': len(ordered)}
     if not ordered:  # 短的音释也要匹配，只有完全没字时才无可查找
         return dict(row, action='skipped_empty'), None
     own = _own_log(page, index_id)
@@ -443,13 +546,19 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
                r_similar2base=info['r_similar2base'], len_match_txt=info['len_match_txt'])
     if by == 'short':
         row['note'] = 'short text search'
+    row['found_by'] = by
+    if spans is not None:
+        hit, note = locate_source(ref_txt, spans, log['match_txt'])
+        row.update(_source_fields(hit), source_note=note)
+        log.update(_source_fields(hit))
     return row, log
 
 
-def _fill_cmp(page, t, index_id, vdict, log=None, min_status=3):
+def _fill_cmp(page, t, index_id, vdict, log=None, min_status=3, overwrite=False):
     """ 在内存里把匹配文本填入目标音释字的cmp_txt，不写库。log默认取页里index_id对应的日志
     返回(状态, 按阅读顺序的字下标, 替身字列表)；状态：ok/no_log/status_too_low/apply_failed
     用单字的比对文本做替身参与对齐，避免异体字编码(多个字符)破坏字数对应
+    overwrite：替身从空cmp_txt开始，等于按最新的匹配文本重填，而不是保留已有的cmp_txt
     """
     from web.tw.page import apply_txt2missingchars
     log = log or _own_log(page, index_id)
@@ -458,8 +567,8 @@ def _fill_cmp(page, t, index_id, vdict, log=None, min_status=3):
     if (log.get('status') or 0) < min_status:
         return 'status_too_low', [], []
     ordered = order_chars(page, t['idx'])
-    proxies = [{'txt': norm_char(page['chars'][i], vdict), 'cmp_txt': page['chars'][i].get('cmp_txt')}
-               for i in ordered]
+    proxies = [{'txt': norm_char(page['chars'][i], vdict),
+                'cmp_txt': None if overwrite else page['chars'][i].get('cmp_txt')} for i in ordered]
     view = dict(page, match_logs=[log])
     if not apply_txt2missingchars(None, view, index_id=index_id, field='cmp_txt', chars=proxies):
         return 'apply_failed', ordered, []
@@ -467,8 +576,9 @@ def _fill_cmp(page, t, index_id, vdict, log=None, min_status=3):
 
 
 def _cmp_changes(page, ordered, proxies):
-    """ 填充后发生变化的字：{page['chars']下标: 新cmp_txt}"""
-    return {i: p['cmp_txt'] for i, p in zip(ordered, proxies) if p.get('cmp_txt') != page['chars'][i].get('cmp_txt')}
+    """ 填充后发生变化的字：{page['chars']下标: 新cmp_txt}；新值为空的字不算(不会把已有内容清掉)"""
+    return {i: p['cmp_txt'] for i, p in zip(ordered, proxies)
+            if p.get('cmp_txt') and p['cmp_txt'] != page['chars'][i].get('cmp_txt')}
 
 
 def run_match(direction='fz2sx', db='tw-test-readonly', only='', commit=False, force=False, set_page_match=False,
@@ -489,15 +599,20 @@ def run_match(direction='fz2sx', db='tw-test-readonly', only='', commit=False, f
     report, stats = [], {}
     for j, job in enumerate(jobs):
         logging.info('[%s/%s] %s <- %s' % (j + 1, len(jobs), _span(job['target_reels']), _span(job['reference_reels'])))
-        ref_txt, ref_counts = build_reference_txt(dbh, job['reference_reels'], vdict)
+        ref_txt, ref_counts, spans = build_reference_txt(dbh, job['reference_reels'], vdict)
         targets, _ = collect_yinshi(dbh, job['target_reels'], vdict)
         if not ref_txt:
-            report.append({'job': job['id'], 'action': 'no_reference', 'note': 'no yinshi text in %s' % ref_counts})
+            report.append({'sutra': job['id'].split('_')[0], 'job': job['id'], 'action': 'no_reference',
+                           'note': 'no yinshi text in %s' % ref_counts})
+            continue
+        if not targets:
+            report.append({'sutra': job['id'].split('_')[0], 'job': job['id'], 'action': 'no_target',
+                           'note': 'no yinshi chars in %s' % _span(job['target_reels'])})
             continue
         for name in sorted_page_names(targets):
             page = targets[name]['page']
             row, log = _match_target(job['id'], name, targets[name], ref_txt, vdict, index_id,
-                                     job['reference_reels'], force)
+                                     job['reference_reels'], force, spans)
             if log is not None:
                 logs = [l for l in page.get('match_logs') or [] if l.get('index_id') != index_id] + [log]
                 if commit:
@@ -510,19 +625,25 @@ def run_match(direction='fz2sx', db='tw-test-readonly', only='', commit=False, f
             report.append(row)
     now = datetime.now().strftime('%Y%m%d-%H%M%S')
     write_csv(path.join(report_dir, 'match_%s-%s.csv' % (direction, now)), report, REPORT_FIELDS)
+    write_csv(path.join(report_dir, 'match_%s-%s_by_sutra.csv' % (direction, now)), summarize_sutras(report),
+              SUMMARY_FIELDS)
     logging.info('status distribution (2 no match .. 5 exact): %s' % dict(sorted(stats.items())))
 
 
-def run_apply(direction='fz2sx', db='tw-test-readonly', only='', min_status=3, commit=False,
+def run_apply(direction='fz2sx', db='tw-test-readonly', only='', min_status=3, commit=False, overwrite=False,
               mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
-    """ 把match_logs里状态>=min_status的匹配文本填入目标音释字的cmp_txt（只填空缺或■的字，不覆盖已有内容）"""
+    """ 把match_logs里状态>=min_status的匹配文本填入目标音释字的cmp_txt
+    默认只填空缺或■的字，不覆盖已有内容；overwrite=True时按最新的匹配文本重填这些音释字，已有的cmp_txt会被改写
+    （包括人工改过的，所以先不加--commit看报告里的overwritten数）
+    """
     import helper as hlp
     hlp.set_logging('match_yinshi')
     index_id = DIRECTIONS[direction]['index_id']
     dbh = hlp.get_db(db)
     vdict = load_variants()
     _, _, _, jobs = _prepare(dbh, direction, only, mapping)
-    logging.info('%s: %s jobs, min_status=%s, commit=%s, db=%s' % (direction, len(jobs), min_status, commit, db))
+    logging.info('%s: %s jobs, min_status=%s, commit=%s, overwrite=%s, db=%s' % (
+        direction, len(jobs), min_status, commit, overwrite, db))
 
     report = []
     for j, job in enumerate(jobs):
@@ -532,7 +653,7 @@ def run_apply(direction='fz2sx', db='tw-test-readonly', only='', min_status=3, c
             t = targets[name]
             page = t['page']
             row = {'job': job['id'], 'page': name, 'method': ','.join(sorted(t['methods'])), 'n_chars': len(t['idx'])}
-            status, ordered, proxies = _fill_cmp(page, t, index_id, vdict, min_status=min_status)
+            status, ordered, proxies = _fill_cmp(page, t, index_id, vdict, min_status=min_status, overwrite=overwrite)
             log = _own_log(page, index_id)
             if status != 'ok':
                 report.append(dict(row, action=status, status=log and log.get('status')))
@@ -542,14 +663,11 @@ def run_apply(direction='fz2sx', db='tw-test-readonly', only='', min_status=3, c
                 dbh.page.update_one({'_id': page['_id']},
                                     {'$set': {'chars.%s.cmp_txt' % i: v for i, v in changes.items()}})
             report.append(dict(row, action='written' if commit else 'dry_run', status=log.get('status'),
-                               note='%s chars changed, %s placeholders' % (
-                                   len(changes), sum(1 for v in changes.values() if v == '■'))))
+                               note='%s chars changed (%s overwrote an existing cmp_txt), %s placeholders' % (
+                                   len(changes), sum(1 for i in changes if page['chars'][i].get('cmp_txt')),
+                                   sum(1 for v in changes.values() if v == '■'))))
     now = datetime.now().strftime('%Y%m%d-%H%M%S')
     write_csv(path.join(report_dir, 'apply_%s-%s.csv' % (direction, now)), report, REPORT_FIELDS)
-
-
-PREVIEW_FIELDS = ['job', 'page', 'method', 'n_chars', 'status', 'r_hit2base', 'r_similar2hit', 'r_similar2base',
-                  'applied', 'n_same', 'n_placeholder', 'n_diff', 'action', 'target_txt', 'match_txt']
 
 
 def render_page_view(page, t, vdict, cmp_by_idx):
@@ -563,12 +681,30 @@ def render_page_view(page, t, vdict, cmp_by_idx):
     return lines
 
 
-def run_preview(sutra, direction='fz2sx', db='tw-test-readonly', min_status=3, mapping=MAPPING_XLSX,
-                report_dir=REPORT_DIR):
-    """ 试跑一部(或几部)经并输出结果，全程只读库：在内存里完成match和apply，没有任何写库的代码路径。
-    sutra: 福州藏经号，如 FZ0002 或 FZ0002,FZ0003（两个方向都用福州藏经号）
-    输出到report_dir：preview_*.txt(逐页逐列对照，便于肉眼检查)和preview_*.csv(每页一行的汇总)
+def _sutra_of(job):
+    return job['z_reels'][0].split('_')[0]
+
+
+def _sutra_line(r):
+    return ('%s  pages=%s  windows without pages=%s  status 5/4/3/2=%s/%s/%s/%s  no_status=%s  avg hit2base=%s similar2hit=%s  '
+            'yinshi chars=%s; of the applied chars: same=%s placeholder=%s diff=%s (%s%% same)' % (
+                r['sutra'], r['pages'], len(r['empty_jobs'].split(',')) if r['empty_jobs'] else 0, r['status_5'], r['status_4'], r['status_3'], r['status_2'], r['no_status'],
+                r['avg_hit2base'], r['avg_similar2hit'], r['chars'], r['same'], r['placeholder'], r['diff'],
+                r['pct_same']))
+
+
+def run_preview(sutra='', direction='fz2sx', db='tw-test-readonly', min_status=3, detail=True, overwrite=False,
+                mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
+    """ 试跑并出报告，全程只读库：在内存里完成match和apply，没有任何写库的代码路径。
+    sutra: 福州藏经号，如 FZ0002 或 FZ0002,FZ0003（两个方向都用福州藏经号）；不填=所有有音释卷的经
+    detail: False时不输出逐页逐列对照，只保留汇总和pages.csv（全库运行时文件更小）
     min_status: 状态低于该值的页只显示匹配文本，不做cmp_txt填充（与apply一致）
+    overwrite: 与apply的overwrite一致，忽略已有的cmp_txt，按新匹配文本重填后对照
+    输出目录 report_dir/preview_<方向>_<经>-<时间>/：
+        summary.txt          总览和每部经一行的汇总
+        summary_by_sutra.csv 每部经一行：各状态页数、平均匹配率、填充字数、需人工看的页
+        pages.csv            每页一行：匹配到哪些卷/哪些页(source_reels/source_pages)、匹配率、填充统计、原文与匹配文本
+        <经号>.txt           该经逐页逐列对照（detail=True时）
     """
     import helper as hlp
     hlp.set_logging('match_yinshi')
@@ -577,74 +713,106 @@ def run_preview(sutra, direction='fz2sx', db='tw-test-readonly', min_status=3, m
     dbh = hlp.get_db(db)
     vdict = load_variants()
     _, _, skipped, jobs = _prepare(dbh, direction, '', mapping)
-    jobs = [j for j in jobs if any(z.split('_')[0] in sutras for z in j['z_reels'])]
+    if sutras:
+        jobs = [j for j in jobs if any(z.split('_')[0] in sutras for z in j['z_reels'])]
     if not jobs:
         logging.info('no %s jobs for %s: not in the mapping sheet/DB, or it has no usable yinshi z reel'
-                     % (direction, sorted(sutras)))
+                     % (direction, sorted(sutras) or 'all'))
         return
-    logging.info('preview %s %s: %s jobs, db=%s (read-only)' % (direction, sorted(sutras), len(jobs), db))
+    logging.info('preview %s %s: %s jobs, db=%s (read-only)' % (direction, sorted(sutras) or 'all', len(jobs), db))
 
-    out, rows, stats = [], [], {}
-    totals = {'chars': 0, 'same': 0, 'placeholder': 0, 'diff': 0}
-    for j, job in enumerate(jobs):
-        logging.info('[%s/%s] %s <- %s' % (j + 1, len(jobs), _span(job['target_reels']), _span(job['reference_reels'])))
-        ref_txt, ref_counts = build_reference_txt(dbh, job['reference_reels'], vdict)
-        targets, _ = collect_yinshi(dbh, job['target_reels'], vdict)
-        out += ['', '#' * 8 + ' %s  <-  %s' % (_span(job['target_reels']), _span(job['reference_reels'])),
-                'reference yinshi chars per reel: %s' % {k: v for k, v in ref_counts.items() if v}]
-        if not ref_txt:
-            out.append('!! no reference yinshi text, nothing to match')
-            continue
-        for name in sorted_page_names(targets):
-            t = targets[name]
-            page = t['page']
-            row, log = _match_target(job['id'], name, t, ref_txt, vdict, index_id, job['reference_reels'], force=True)
-            base_txt, _ = page_text(page, t['idx'], vdict)
-            row['target_txt'] = base_txt.replace('\n', '/')
-            head = '=== %s | method=%s | chars=%s' % (name, row['method'], row['n_chars'])
-            if log is None:
-                out += ['', head + ' | %s %s' % (row['action'], row.get('note', ''))]
-                rows.append(row)
-                continue
-            stats[log['status']] = stats.get(log['status'], 0) + 1
-            row['match_txt'] = log['match_txt'].replace('\n', '/')
-            head += ' | status=%s hit2base=%s similar2hit=%s' % (log['status'], log['r_hit2base'], log['r_similar2hit'])
-            if log.get('found_by') == 'short':
-                head += ' [short text search]'
-            status, ordered, proxies = _fill_cmp(page, t, index_id, vdict, log=log, min_status=min_status)
-            if status != 'ok':
-                row['action'] = 'not_applied (%s)' % status
-                out += ['', head + ' | not applied (%s); matched text:' % status, '  ' + row['match_txt']]
-                rows.append(row)
-                continue
-            cmp_by_idx = {i: p['cmp_txt'] for i, p in zip(ordered, proxies)}
-            n_same = sum(1 for i, p in zip(ordered, proxies) if p['cmp_txt'] == p['txt'])
-            n_ph = sum(1 for p in proxies if p['cmp_txt'] == '■')
-            row.update(action='previewed', applied=True, n_same=n_same, n_placeholder=n_ph,
-                       n_diff=len(ordered) - n_same - n_ph)
-            for key, v in (('chars', len(ordered)), ('same', n_same), ('placeholder', n_ph), ('diff', row['n_diff'])):
-                totals[key] += v
-            out += ['', head + ' | same=%s placeholder(■)=%s other-diff=%s' % (n_same, n_ph, row['n_diff'])]
-            out += render_page_view(page, t, vdict, cmp_by_idx)
-            rows.append(row)
-
-    summary = ['preview  direction=%s  sutra=%s  db=%s  (read-only, nothing written)' % (direction, sorted(sutras), db),
-               'jobs=%s  pages=%s  status distribution (2 no match .. 5 exact): %s' % (
-                   len(jobs), len(rows), dict(sorted(stats.items()))),
-               'applied chars=%(chars)s  identical to own char=%(same)s  placeholder(■)=%(placeholder)s  '
-               'other differences (variant chars/misreads)=%(diff)s' % totals,
-               'legend: txt = the target char, cmp = cmp_txt that would be filled, ＾ = differs (■ = no counterpart)']
     now = datetime.now().strftime('%Y%m%d-%H%M%S')
-    base = 'preview_%s_%s-%s' % (direction, '+'.join(sorted(sutras)), now)
-    os.makedirs(report_dir, exist_ok=True)
-    txt_path = path.join(report_dir, base + '.txt')
-    with open(txt_path, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(summary + out) + '\n')
-    write_csv(path.join(report_dir, base + '.csv'), rows, PREVIEW_FIELDS)
-    for line in summary:
-        logging.info(line)
-    logging.info('open %s' % txt_path)
+    label = '+'.join(sorted(sutras)) if 0 < len(sutras) <= 3 else ('%s_sutras' % len(sutras) if sutras else 'all')
+    out_dir = path.join(report_dir, 'preview_%s_%s-%s' % (direction, label, now))
+    sections, rows, stats = {}, [], {}  # 经号 -> 详细行
 
+    def write_outputs():
+        summary = summarize_sutras(rows)
+        head = ['preview  direction=%s  sutra=%s  db=%s  (read-only, nothing written)' % (
+                    direction, sorted(sutras) or 'all', db),
+                'jobs=%s  pages=%s  status distribution (2 no match .. 5 exact): %s' % (
+                    len(jobs), len([r for r in rows if r.get('page')]), dict(sorted(stats.items()))),
+                'legend: txt = the target char, cmp = cmp_txt that would be filled, ＾ = differs (■ = no counterpart)',
+                'files: summary_by_sutra.csv (one row per sutra), pages.csv (one row per page, with the source '
+                'reels/pages), <sutra>.txt (column by column)', '', 'per sutra:'] + [_sutra_line(r) for r in summary]
+        os.makedirs(out_dir, exist_ok=True)
+        with open(path.join(out_dir, 'summary.txt'), 'w', encoding='utf-8') as f:
+            f.write('\n'.join(head) + '\n')
+        write_csv(path.join(out_dir, 'summary_by_sutra.csv'), summary, SUMMARY_FIELDS)
+        write_csv(path.join(out_dir, 'pages.csv'), rows, REPORT_FIELDS)
+        if detail:
+            by_sutra = {r['sutra']: r for r in summary}
+            for name, lines in sections.items():
+                with open(path.join(out_dir, name + '.txt'), 'w', encoding='utf-8') as f:
+                    f.write('\n'.join([_sutra_line(by_sutra[name])] + lines) + '\n' if name in by_sutra
+                            else '\n'.join(lines) + '\n')
+        for line in head:
+            logging.info(line)
+        logging.info('reports in %s' % out_dir)
+
+    try:
+        for j, job in enumerate(jobs):
+            logging.info('[%s/%s] %s <- %s' % (j + 1, len(jobs), _span(job['target_reels']), _span(job['reference_reels'])))
+            out = sections.setdefault(_sutra_of(job), [])
+            try:
+                _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats, direction, overwrite)
+            except Exception as e:  # 单个任务出错不影响其它经的报告
+                logging.exception('job %s failed' % job['id'])
+                out.append('!! job %s failed: %s' % (job['id'], e))
+                rows.append({'sutra': _sutra_of(job), 'job': job['id'], 'action': 'job_error', 'note': str(e)})
+    finally:
+        write_outputs()
+
+
+def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats, direction='fz2sx', overwrite=False):
+    """ 试跑一个任务：逐页匹配并在内存里填cmp_txt，结果追加到out(详细行)、rows(页级报告行)、stats(状态分布)"""
+    ref_txt, ref_counts, spans = build_reference_txt(dbh, job['reference_reels'], vdict)
+    targets, target_counts = collect_yinshi(dbh, job['target_reels'], vdict)
+    out += ['', '#' * 8 + ' %s  <-  %s' % (_span(job['target_reels']), _span(job['reference_reels'])),
+            'reference yinshi chars per reel: %s' % {k: v for k, v in ref_counts.items() if v},
+            'target yinshi chars per reel: %s' % {k: v for k, v in target_counts.items() if v}]
+    base = {'sutra': _sutra_of(job), 'job': job['id'], 'reference': _span(job['reference_reels'])}
+    if not ref_txt:
+        out.append('!! no reference yinshi text, nothing to match')
+        rows.append(dict(base, action='no_reference', note='no yinshi text in %s' % ref_counts))
+        return
+    if not targets:
+        out.append('!! no target yinshi chars (%s reels have no E-format columns / no text), nothing to match'
+                   % DIRECTIONS[direction]['target'])
+        rows.append(dict(base, action='no_target', note='no yinshi chars in %s' % _span(job['target_reels'])))
+        return
+    for name in sorted_page_names(targets):
+        t = targets[name]
+        page = t['page']
+        row, log = _match_target(job['id'], name, t, ref_txt, vdict, index_id, job['reference_reels'], force=True,
+                                 spans=spans)
+        base_txt, _ = page_text(page, t['idx'], vdict)
+        row['target_txt'] = base_txt.replace('\n', '/')
+        head = '=== %s | method=%s | chars=%s' % (name, row['method'], row['n_chars'])
+        rows.append(row)
+        if log is None:
+            out += ['', head + ' | %s %s' % (row['action'], row.get('note', ''))]
+            continue
+        stats[log['status']] = stats.get(log['status'], 0) + 1
+        row['match_txt'] = log['match_txt'].replace('\n', '/')
+        head += ' | status=%s hit2base=%s similar2hit=%s' % (log['status'], log['r_hit2base'], log['r_similar2hit'])
+        if log.get('found_by') == 'short':
+            head += ' [short text search]'
+        head += (' | matched %s: %s' % (row['source_reels'], row['source_pages'])
+                 if row.get('source_reels') else ' | no source located')
+        status, ordered, proxies = _fill_cmp(page, t, index_id, vdict, log=log, min_status=min_status, overwrite=overwrite)
+        if status != 'ok':
+            row['action'] = 'not_applied (%s)' % status
+            out += ['', head + ' | not applied (%s); matched text:' % status, '  ' + row['match_txt']]
+            continue
+        cmp_by_idx = {i: p['cmp_txt'] for i, p in zip(ordered, proxies)}
+        n_same = sum(1 for i, p in zip(ordered, proxies) if p['cmp_txt'] == p['txt'])
+        n_ph = sum(1 for p in proxies if p['cmp_txt'] == '■')
+        row.update(action='previewed', applied=True, n_same=n_same, n_placeholder=n_ph,
+                   n_diff=len(ordered) - n_same - n_ph)
+        out += ['', head + ' | same=%s placeholder(■)=%s other-diff=%s' % (n_same, n_ph, row['n_diff'])]
+        if detail:
+            out += render_page_view(page, t, vdict, cmp_by_idx)
 
 # endregion
 

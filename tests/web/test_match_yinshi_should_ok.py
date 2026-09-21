@@ -179,3 +179,61 @@ def test_find_short_match_rejects_ambiguous_and_missing():
     assert my.find_short_match('鑿鑿鑿鑿鑿鑿', REF) == ''  # 没有相似的文本
     assert my.find_short_match('', REF) == ''
     assert my.find_short_match('足够长的文本却比参考还长', '短') == ''
+
+
+SPANS = [(0, 8, 'SX_1_4_57', ['SX0001_004']), (9, 17, 'SX_1_4_58', ['SX0001_004']),
+         (18, 26, 'SX_1_5_1', ['SX0001_004', 'SX0001_005'])]
+SPAN_REF = '替上六中反詎音巨\n鬼反笇筭字鄔波上\n減反區區丘俱反庸'
+
+
+def test_locate_source_finds_pages_spanning_the_match():
+    hit, note = my.locate_source(SPAN_REF, SPANS, '鬼反笇筭字鄔波上\n減反區')  # 跨第2、3页
+    assert [n for n, _ in hit] == ['SX_1_4_58', 'SX_1_5_1']
+    assert my._source_fields(hit) == {'source_reels': 'SX0001_004,SX0001_005', 'source_pages': 'SX_1_4_58,SX_1_5_1'}
+    assert note == ''
+    hit, _ = my.locate_source(SPAN_REF, SPANS, '替上六中反')
+    assert [n for n, _ in hit] == ['SX_1_4_57']
+
+
+def test_locate_source_falls_back_to_fuzzy_and_reports_failure():
+    hit, note = my.locate_source(SPAN_REF, SPANS, '鬼反笇■字鄔波上')  # 含■，不能原样找到
+    assert [n for n, _ in hit] == ['SX_1_4_58'] and 'fuzzy' in note
+    assert my.locate_source(SPAN_REF, SPANS, '')[0] == []
+    assert my.locate_source(SPAN_REF, SPANS, '鑿鑿鑿鑿鑿鑿鑿鑿')[1] == 'source not located'
+
+
+def test_summarize_sutras_counts_status_rates_and_review_pages():
+    rows = [
+        {'sutra': 'FZ0002', 'job': 'FZ0002_010z1', 'reference': 'SX0002_001..010', 'page': 'p1', 'n_chars': 100,
+         'status': 5, 'r_hit2base': 1.0, 'r_similar2hit': 1.0, 'n_same': 100, 'n_placeholder': 0, 'n_diff': 0},
+        {'sutra': 'FZ0002', 'job': 'FZ0002_010z1', 'reference': 'SX0002_001..010', 'page': 'p2', 'n_chars': 50,
+         'status': 3, 'r_hit2base': 0.8, 'r_similar2hit': 0.9, 'n_same': 30, 'n_placeholder': 10, 'n_diff': 10},
+        {'sutra': 'FZ0002', 'job': 'FZ0002_010z1', 'page': 'p3', 'n_chars': 8, 'status': 2, 'r_hit2base': 0.1,
+         'r_similar2hit': 0.2},
+        {'sutra': 'FZ0002', 'job': 'FZ0002_011z1', 'page': 'p4', 'n_chars': 0, 'action': 'skipped_empty'},
+        {'sutra': 'FZ0003', 'job': 'FZ0003_010z1', 'page': 'q1', 'n_chars': 20, 'status': 4, 'r_hit2base': 0.95,
+         'r_similar2hit': 0.95, 'n_same': 19, 'n_placeholder': 0, 'n_diff': 1},
+        {'job': 'FZ0009_001z1', 'action': 'no_reference'},  # 没有sutra的行忽略
+    ]
+    s = {r['sutra']: r for r in my.summarize_sutras(rows)}
+    assert set(s) == {'FZ0002', 'FZ0003'}
+    a = s['FZ0002']
+    assert (a['pages'], a['status_5'], a['status_3'], a['status_2'], a['no_status']) == (4, 1, 1, 1, 1)
+    assert a['jobs'] == 'FZ0002_010z1,FZ0002_011z1'
+    assert a['avg_hit2base'] == round((1.0 + 0.8 + 0.1) / 3, 3)
+    assert (a['same'], a['placeholder'], a['diff']) == (130, 10, 10) and a['pct_same'] == 86.7
+    assert a['review_pages'] == 'p3,p4'  # 状态低于3或没有状态的页
+    assert s['FZ0003']['review_pages'] == ''
+    # 没有产生页的任务(目标或参考没有音释文本)在汇总里单独列出
+    rows2 = rows[:1] + [{'sutra': 'FZ0002', 'job': 'FZ0002_020z1', 'action': 'no_target'},
+                        {'sutra': 'FZ0002', 'job': 'FZ0002_030z1', 'action': 'no_reference'}]
+    assert my.summarize_sutras(rows2)[0]['empty_jobs'] == 'FZ0002_020z1(no_target),FZ0002_030z1(no_reference)'
+    assert my.summarize_sutras(rows2)[0]['pages'] == 1
+
+
+def test_cmp_changes_only_reports_real_new_values():
+    page = {'chars': [{'cmp_txt': '潛'}, {'cmp_txt': '■'}, {}, {'cmp_txt': '反'}]}
+    ordered = [0, 1, 2, 3]
+    proxies = [{'cmp_txt': '潜'}, {'cmp_txt': '昨'}, {'cmp_txt': '■'}, {'cmp_txt': None}]
+    # 新值与原值相同的不算；新值为空的不会清掉已有内容
+    assert my._cmp_changes(page, ordered, proxies) == {0: '潜', 1: '昨', 2: '■'}
