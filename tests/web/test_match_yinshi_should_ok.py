@@ -148,3 +148,12 @@ def test_page_text_orders_columns_and_chars_by_id_not_list_order():
     page['chars'].reverse()
     text, ordered = my.page_text(page, set(range(4)), {})
     assert text == 'ab\ncd'
+
+
+def test_render_page_view_marks_differences_per_column():
+    page = make_page('FZ_1_1_1', [(1, '潜昨塩反'), (2, '天字')])
+    ids = set(range(len(page['chars'])))
+    cmp_by_idx = {0: '潛', 1: '昨', 2: '𥂁', 3: '反', 4: '■', 5: '■'}
+    lines = my.render_page_view(page, {'idx': ids}, {}, cmp_by_idx)
+    assert lines == ['b1c1  txt: 潜昨塩反', '      cmp: 潛昨𥂁反', '           ＾　＾　',
+                     'b1c2  txt: 天字', '      cmp: ■■', '           ＾＾']

@@ -7,6 +7,7 @@
     sx2fz        思溪藏音释字(E格式)获得cmp_txt，参考文本来自福州藏z卷的音释
 
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
+    python match_yinshi.py preview --sutra=FZ0002 [--direction=fz2sx|sx2fz] [--db=...]   # 只读，输出逐页逐列对照
     python match_yinshi.py plan  [--with_counts]
     python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit] [--force] [--set_page_match]
     python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--commit]
@@ -394,6 +395,55 @@ REPORT_FIELDS = ['job', 'page', 'method', 'n_chars', 'status', 'r_hit2base', 'r_
                  'len_match_txt', 'action', 'note']
 
 
+def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, force=False):
+    """ 为一页目标音释字在参考文本里查找匹配。返回(报告行, match_log或None)，不写库"""
+    from util.find_match import find_best_match
+    from web.tw.match import get_match_info
+    page = t['page']
+    base_txt, ordered = page_text(page, t['idx'], vdict)
+    row = {'job': job_id, 'page': name, 'method': ','.join(sorted(t['methods'])), 'n_chars': len(ordered)}
+    if len(ordered) < MIN_TXT_LEN:
+        return dict(row, action='skipped_short'), None
+    own = _own_log(page, index_id)
+    if own and own.get('status') == 5 and not force:
+        return dict(row, action='skipped_done', status=5), None
+    try:
+        info = get_match_info(base_txt, find_best_match(base_txt, ref_txt)[0])
+    except Exception as e:  # 单页出错不影响整批
+        logging.exception('%s failed' % name)
+        return dict(row, action='error', note=str(e)), None
+    log = dict(info, index_id=index_id, created_by='operator', create_time=datetime.now(),
+               reference_reels=reference_reels, method=row['method'])
+    row.update(status=info['status'], r_hit2base=info['r_hit2base'], r_similar2hit=info['r_similar2hit'],
+               r_similar2base=info['r_similar2base'], len_match_txt=info['len_match_txt'])
+    return row, log
+
+
+def _fill_cmp(page, t, index_id, vdict, log=None, min_status=3):
+    """ 在内存里把匹配文本填入目标音释字的cmp_txt，不写库。log默认取页里index_id对应的日志
+    返回(状态, 按阅读顺序的字下标, 替身字列表)；状态：ok/no_log/status_too_low/apply_failed
+    用单字的比对文本做替身参与对齐，避免异体字编码(多个字符)破坏字数对应
+    """
+    from web.tw.page import apply_txt2missingchars
+    log = log or _own_log(page, index_id)
+    if not log:
+        return 'no_log', [], []
+    if (log.get('status') or 0) < min_status:
+        return 'status_too_low', [], []
+    ordered = order_chars(page, t['idx'])
+    proxies = [{'txt': norm_char(page['chars'][i], vdict), 'cmp_txt': page['chars'][i].get('cmp_txt')}
+               for i in ordered]
+    view = dict(page, match_logs=[log])
+    if not apply_txt2missingchars(None, view, index_id=index_id, field='cmp_txt', chars=proxies):
+        return 'apply_failed', ordered, []
+    return 'ok', ordered, proxies
+
+
+def _cmp_changes(page, ordered, proxies):
+    """ 填充后发生变化的字：{page['chars']下标: 新cmp_txt}"""
+    return {i: p['cmp_txt'] for i, p in zip(ordered, proxies) if p.get('cmp_txt') != page['chars'][i].get('cmp_txt')}
+
+
 def run_match(direction='fz2sx', db='tw-test-readonly', only='', commit=False, force=False, set_page_match=False,
               mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
     """ 在窗口内为目标页查找参考文本，写入match_logs（index_id见DIRECTIONS）。
@@ -401,8 +451,7 @@ def run_match(direction='fz2sx', db='tw-test-readonly', only='', commit=False, f
     默认不改page.match(音释文本占比会扭曲整页状态)，set_page_match可开启
     """
     import helper as hlp
-    from util.find_match import find_best_match
-    from web.tw.match import get_match_info, get_best_match
+    from web.tw.match import get_best_match
     hlp.set_logging('match_yinshi')
     index_id = DIRECTIONS[direction]['index_id']
     dbh = hlp.get_db(db)
@@ -419,36 +468,19 @@ def run_match(direction='fz2sx', db='tw-test-readonly', only='', commit=False, f
             report.append({'job': job['id'], 'action': 'no_reference', 'note': 'no yinshi text in %s' % ref_counts})
             continue
         for name in sorted_page_names(targets):
-            t = targets[name]
-            page = t['page']
-            base_txt, ordered = page_text(page, t['idx'], vdict)
-            row = {'job': job['id'], 'page': name, 'method': ','.join(sorted(t['methods'])), 'n_chars': len(ordered)}
-            own = _own_log(page, index_id)
-            if len(ordered) < MIN_TXT_LEN:
-                report.append(dict(row, action='skipped_short'))
-                continue
-            if own and own.get('status') == 5 and not force:
-                report.append(dict(row, action='skipped_done', status=5))
-                continue
-            try:
-                match_txt = find_best_match(base_txt, ref_txt)[0]
-                info = get_match_info(base_txt, match_txt)
-            except Exception as e:  # 单页出错不影响整批
-                logging.exception('%s failed' % name)
-                report.append(dict(row, action='error', note=str(e)))
-                continue
-            log = dict(info, index_id=index_id, created_by='operator', create_time=datetime.now(),
-                       reference_reels=job['reference_reels'], method=row['method'])
-            logs = [l for l in page.get('match_logs') or [] if l.get('index_id') != index_id] + [log]
-            if commit:
-                update = {'match_logs': logs}
-                if set_page_match:
-                    update['match'] = get_best_match(logs)
-                dbh.page.update_one({'_id': page['_id']}, {'$set': update})
-            stats[info['status']] = stats.get(info['status'], 0) + 1
-            report.append(dict(row, action='written' if commit else 'dry_run', status=info['status'],
-                               r_hit2base=info['r_hit2base'], r_similar2hit=info['r_similar2hit'],
-                               r_similar2base=info['r_similar2base'], len_match_txt=info['len_match_txt']))
+            page = targets[name]['page']
+            row, log = _match_target(job['id'], name, targets[name], ref_txt, vdict, index_id,
+                                     job['reference_reels'], force)
+            if log is not None:
+                logs = [l for l in page.get('match_logs') or [] if l.get('index_id') != index_id] + [log]
+                if commit:
+                    update = {'match_logs': logs}
+                    if set_page_match:
+                        update['match'] = get_best_match(logs)
+                    dbh.page.update_one({'_id': page['_id']}, {'$set': update})
+                row['action'] = 'written' if commit else 'dry_run'
+                stats[log['status']] = stats.get(log['status'], 0) + 1
+            report.append(row)
     now = datetime.now().strftime('%Y%m%d-%H%M%S')
     write_csv(path.join(report_dir, 'match_%s-%s.csv' % (direction, now)), report, REPORT_FIELDS)
     logging.info('status distribution (2 no match .. 5 exact): %s' % dict(sorted(stats.items())))
@@ -458,7 +490,6 @@ def run_apply(direction='fz2sx', db='tw-test-readonly', only='', min_status=3, c
               mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
     """ 把match_logs里状态>=min_status的匹配文本填入目标音释字的cmp_txt（只填空缺或■的字，不覆盖已有内容）"""
     import helper as hlp
-    from web.tw.page import apply_txt2missingchars
     hlp.set_logging('match_yinshi')
     index_id = DIRECTIONS[direction]['index_id']
     dbh = hlp.get_db(db)
@@ -474,21 +505,12 @@ def run_apply(direction='fz2sx', db='tw-test-readonly', only='', min_status=3, c
             t = targets[name]
             page = t['page']
             row = {'job': job['id'], 'page': name, 'method': ','.join(sorted(t['methods'])), 'n_chars': len(t['idx'])}
+            status, ordered, proxies = _fill_cmp(page, t, index_id, vdict, min_status=min_status)
             log = _own_log(page, index_id)
-            if not log:
-                report.append(dict(row, action='no_log'))
+            if status != 'ok':
+                report.append(dict(row, action=status, status=log and log.get('status')))
                 continue
-            if (log.get('status') or 0) < min_status:
-                report.append(dict(row, action='status_too_low', status=log.get('status')))
-                continue
-            ordered = order_chars(page, t['idx'])
-            # 用单字的比对文本做替身参与对齐，避免异体字编码(多个字符)破坏字数对应
-            proxies = [{'txt': norm_char(page['chars'][i], vdict), 'cmp_txt': page['chars'][i].get('cmp_txt')}
-                       for i in ordered]
-            if not apply_txt2missingchars(dbh, page, index_id=index_id, field='cmp_txt', chars=proxies):
-                report.append(dict(row, action='apply_failed', status=log.get('status')))
-                continue
-            changes = {i: p['cmp_txt'] for i, p in zip(ordered, proxies) if p.get('cmp_txt') != page['chars'][i].get('cmp_txt')}
+            changes = _cmp_changes(page, ordered, proxies)
             if commit and changes:
                 dbh.page.update_one({'_id': page['_id']},
                                     {'$set': {'chars.%s.cmp_txt' % i: v for i, v in changes.items()}})
@@ -499,10 +521,106 @@ def run_apply(direction='fz2sx', db='tw-test-readonly', only='', min_status=3, c
     write_csv(path.join(report_dir, 'apply_%s-%s.csv' % (direction, now)), report, REPORT_FIELDS)
 
 
+PREVIEW_FIELDS = ['job', 'page', 'method', 'n_chars', 'status', 'r_hit2base', 'r_similar2hit', 'r_similar2base',
+                  'applied', 'n_same', 'n_placeholder', 'n_diff', 'action', 'target_txt', 'match_txt']
+
+
+def render_page_view(page, t, vdict, cmp_by_idx):
+    """ 一页音释的列对照，每列三行：原字(txt)、比对字(cmp)、差异标记（＾表示与原字不同，含■占位）"""
+    lines = []
+    for col_id, ids in group_columns(page, t['idx']):
+        own = ''.join(norm_char(page['chars'][i], vdict) for i in ids)
+        cmp = ''.join((cmp_by_idx.get(i) or '＿')[0] for i in ids)
+        marks = ''.join('　' if a == b else '＾' for a, b in zip(own, cmp))
+        lines += ['%-5s txt: %s' % (col_id, own), '%-5s cmp: %s' % ('', cmp), '%-5s      %s' % ('', marks)]
+    return lines
+
+
+def run_preview(sutra, direction='fz2sx', db='tw-test-readonly', min_status=3, mapping=MAPPING_XLSX,
+                report_dir=REPORT_DIR):
+    """ 试跑一部(或几部)经并输出结果，全程只读库：在内存里完成match和apply，没有任何写库的代码路径。
+    sutra: 福州藏经号，如 FZ0002 或 FZ0002,FZ0003（两个方向都用福州藏经号）
+    输出到report_dir：preview_*.txt(逐页逐列对照，便于肉眼检查)和preview_*.csv(每页一行的汇总)
+    min_status: 状态低于该值的页只显示匹配文本，不做cmp_txt填充（与apply一致）
+    """
+    import helper as hlp
+    hlp.set_logging('match_yinshi')
+    index_id = DIRECTIONS[direction]['index_id']
+    sutras = _parse_only(sutra)
+    dbh = hlp.get_db(db)
+    vdict = load_variants()
+    _, _, skipped, jobs = _prepare(dbh, direction, '', mapping)
+    jobs = [j for j in jobs if any(z.split('_')[0] in sutras for z in j['z_reels'])]
+    if not jobs:
+        logging.info('no %s jobs for %s: not in the mapping sheet/DB, or it has no usable yinshi z reel'
+                     % (direction, sorted(sutras)))
+        return
+    logging.info('preview %s %s: %s jobs, db=%s (read-only)' % (direction, sorted(sutras), len(jobs), db))
+
+    out, rows, stats = [], [], {}
+    totals = {'chars': 0, 'same': 0, 'placeholder': 0, 'diff': 0}
+    for j, job in enumerate(jobs):
+        logging.info('[%s/%s] %s <- %s' % (j + 1, len(jobs), _span(job['target_reels']), _span(job['reference_reels'])))
+        ref_txt, ref_counts = build_reference_txt(dbh, job['reference_reels'], vdict)
+        targets, _ = collect_yinshi(dbh, job['target_reels'], vdict)
+        out += ['', '#' * 8 + ' %s  <-  %s' % (_span(job['target_reels']), _span(job['reference_reels'])),
+                'reference yinshi chars per reel: %s' % {k: v for k, v in ref_counts.items() if v}]
+        if not ref_txt:
+            out.append('!! no reference yinshi text, nothing to match')
+            continue
+        for name in sorted_page_names(targets):
+            t = targets[name]
+            page = t['page']
+            row, log = _match_target(job['id'], name, t, ref_txt, vdict, index_id, job['reference_reels'], force=True)
+            base_txt, _ = page_text(page, t['idx'], vdict)
+            row['target_txt'] = base_txt.replace('\n', '/')
+            head = '=== %s | method=%s | chars=%s' % (name, row['method'], row['n_chars'])
+            if log is None:
+                out += ['', head + ' | %s %s' % (row['action'], row.get('note', ''))]
+                rows.append(row)
+                continue
+            stats[log['status']] = stats.get(log['status'], 0) + 1
+            row['match_txt'] = log['match_txt'].replace('\n', '/')
+            head += ' | status=%s hit2base=%s similar2hit=%s' % (log['status'], log['r_hit2base'], log['r_similar2hit'])
+            status, ordered, proxies = _fill_cmp(page, t, index_id, vdict, log=log, min_status=min_status)
+            if status != 'ok':
+                row['action'] = 'not_applied (%s)' % status
+                out += ['', head + ' | not applied (%s); matched text:' % status, '  ' + row['match_txt']]
+                rows.append(row)
+                continue
+            cmp_by_idx = {i: p['cmp_txt'] for i, p in zip(ordered, proxies)}
+            n_same = sum(1 for i, p in zip(ordered, proxies) if p['cmp_txt'] == p['txt'])
+            n_ph = sum(1 for p in proxies if p['cmp_txt'] == '■')
+            row.update(action='previewed', applied=True, n_same=n_same, n_placeholder=n_ph,
+                       n_diff=len(ordered) - n_same - n_ph)
+            for key, v in (('chars', len(ordered)), ('same', n_same), ('placeholder', n_ph), ('diff', row['n_diff'])):
+                totals[key] += v
+            out += ['', head + ' | same=%s placeholder(■)=%s other-diff=%s' % (n_same, n_ph, row['n_diff'])]
+            out += render_page_view(page, t, vdict, cmp_by_idx)
+            rows.append(row)
+
+    summary = ['preview  direction=%s  sutra=%s  db=%s  (read-only, nothing written)' % (direction, sorted(sutras), db),
+               'jobs=%s  pages=%s  status distribution (2 no match .. 5 exact): %s' % (
+                   len(jobs), len(rows), dict(sorted(stats.items()))),
+               'applied chars=%(chars)s  identical to own char=%(same)s  placeholder(■)=%(placeholder)s  '
+               'other differences (variant chars/misreads)=%(diff)s' % totals,
+               'legend: txt = the target char, cmp = cmp_txt that would be filled, ＾ = differs (■ = no counterpart)']
+    now = datetime.now().strftime('%Y%m%d-%H%M%S')
+    base = 'preview_%s_%s-%s' % (direction, '+'.join(sorted(sutras)), now)
+    os.makedirs(report_dir, exist_ok=True)
+    txt_path = path.join(report_dir, base + '.txt')
+    with open(txt_path, 'w', encoding='utf-8') as f:
+        f.write('\n'.join(summary + out) + '\n')
+    write_csv(path.join(report_dir, base + '.csv'), rows, PREVIEW_FIELDS)
+    for line in summary:
+        logging.info(line)
+    logging.info('open %s' % txt_path)
+
+
 # endregion
 
 
 if __name__ == '__main__':
     import fire
 
-    fire.Fire({'plan': run_plan, 'match': run_match, 'apply': run_apply})
+    fire.Fire({'plan': run_plan, 'match': run_match, 'apply': run_apply, 'preview': run_preview})
