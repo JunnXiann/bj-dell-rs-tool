@@ -303,3 +303,53 @@ def test_match_target_without_leftover_is_unchanged():
     ref = '\n'.join(['決定義經'] + FZ_A + FZ_B)  # 顺序一致
     row, log = my._match_target('FZ1280_001z1', 'SX_510_10_90', t, ref, {}, 'fz_yinshi_scoped', ['FZ1280_001z1'])
     assert 'leftover_chars' not in row and 'leftover_chars' not in log
+
+
+def page_with_cbeta_match(status=3, hit=120, similar=110):
+    """ 整页200字，cbeta匹配只命中了正文；另有一条本工具写的音释日志(index_id相同的不算“之前”)"""
+    prev = {'index_id': 'jsz-ik', 'status': status, 'len_base_txt': 200, 'len_hit': hit, 'len_similar': similar,
+            'len_match_txt': hit, 'r_hit2base': hit / 200, 'r_similar2base': similar / 200}
+    own = {'index_id': 'fz_yinshi_scoped', 'status': 5, 'len_hit': 999, 'len_similar': 999, 'len_match_txt': 999}
+    return {'name': 'SX_1_1_1', 'match_logs': [prev, own], 'match': prev, 'base_txt': '正文' * 100, 'chars': [], 'columns': []}
+
+
+def test_page_match_change_adds_yinshi_hits_to_the_whole_page():
+    page = page_with_cbeta_match()  # 整页：命中120、相似110，状态3
+    log = {'len_hit': 70, 'len_similar': 68, 'len_match_txt': 70}
+    r = my.page_match_change(page, 'fz_yinshi_scoped', log, applied=True)
+    assert (r['page_status_before'], r['page_status_after'], r['page_change']) == (3, 4, 'improved')
+    assert (r['page_r_hit_before'], r['page_r_hit_after']) == (0.6, 0.95)  # 190/200
+    assert r['page_r_similar_after'] == 0.89 and r['page_chars'] == 200 and r['page_match_from'] == 'jsz-ik'
+
+
+def test_page_match_change_not_applied_or_no_earlier_match():
+    log = {'len_hit': 70, 'len_similar': 68, 'len_match_txt': 70}
+    r = my.page_match_change(page_with_cbeta_match(), 'fz_yinshi_scoped', log, applied=False)
+    assert (r['page_status_before'], r['page_status_after'], r['page_change']) == (3, 3, 'not applied')
+    # 整页原来没有匹配：之前为空，之后只有音释字的命中，占整页的比例低，仍是status 2
+    page = {'name': 'FZ_1_1_1', 'match_logs': [], 'chars': [], 'columns': []}
+    page['chars'] = [{'char_id': 'b1c1c%d' % k, 'cid': k, 'txt': '字'} for k in range(1, 101)]
+    page['columns'] = [{'column_id': 'b1c1', 'cid': 1}]
+    r = my.page_match_change(page, 'sx_yinshi_scoped', {'len_hit': 40, 'len_similar': 38, 'len_match_txt': 40}, True)
+    assert r['page_status_before'] == '' and r['page_status_after'] == 2 and r['page_chars'] == 100
+    assert r['page_r_hit_after'] == 0.4
+
+
+def test_page_match_change_never_makes_the_page_worse_and_caps_at_page_size():
+    # 原来状态5(全命中)：不管音释日志怎么算，之后不会更差，命中数不超过整页字数
+    page = page_with_cbeta_match(status=5, hit=200, similar=200)
+    r = my.page_match_change(page, 'fz_yinshi_scoped', {'len_hit': 50, 'len_similar': 30, 'len_match_txt': 50}, True)
+    assert r['page_status_after'] == 5 and r['page_r_hit_after'] == 1.0 and r['page_change'] == 'same status'
+
+
+def test_page_status_summary_counts_before_and_after():
+    rows = [{'page_change': 'improved', 'page_status_before': 3, 'page_status_after': 4,
+             'page_r_similar_before': 0.5, 'page_r_similar_after': 0.9},
+            {'page_change': 'same status', 'page_status_before': 4, 'page_status_after': 4,
+             'page_r_similar_before': 0.9, 'page_r_similar_after': 0.9},
+            {'page_change': 'improved', 'page_status_before': '', 'page_status_after': 3,
+             'page_r_similar_before': '', 'page_r_similar_after': 0.6},
+            {'page': 'no comparison for this row'}]
+    before, after, improved, total, avg_b, avg_a = my.page_status_summary(rows)
+    assert (before, after, improved, total) == ('4:1 3:1 -:1', '4:2 3:1', 2, 3)
+    assert (avg_b, avg_a) == (0.467, 0.8)

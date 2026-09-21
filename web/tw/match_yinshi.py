@@ -299,7 +299,7 @@ def _with_retry(fn, tries=3):
 
 
 # 只取匹配用到的字段：字数组里有坐标等大量字段，全取会让每页数据大几倍。数组元素个数和顺序不变，下标仍可用于写库
-PAGE_FIELDS = {'name': 1, 'match_logs': 1, 'chars.char_id': 1, 'chars.cid': 1, 'chars.txt': 1, 'chars.cmp_txt': 1,
+PAGE_FIELDS = {'name': 1, 'match': 1, 'base_txt': 1, 'match_logs': 1, 'chars.char_id': 1, 'chars.cid': 1, 'chars.txt': 1, 'chars.cmp_txt': 1,
                'chars.deleted': 1, 'columns.column_id': 1, 'columns.cid': 1, 'columns.is_center': 1,
                'columns.deleted': 1}
 
@@ -484,11 +484,31 @@ def _source_fields(hit):
 
 
 REPORT_FIELDS = ['sutra', 'job', 'reference', 'page', 'method', 'n_chars', 'status', 'r_hit2base', 'r_similar2hit',
-                 'r_similar2base', 'len_match_txt', 'found_by', 'leftover_chars', 'source_reels', 'source_pages', 'source_note',
+                 'r_similar2base', 'len_match_txt', 'page_chars', 'page_match_from', 'page_status_before',
+                 'page_status_after', 'page_change', 'page_r_hit_before', 'page_r_hit_after', 'page_r_similar_before',
+                 'page_r_similar_after', 'found_by', 'leftover_chars', 'source_reels', 'source_pages', 'source_note',
                  'applied', 'n_same', 'n_placeholder', 'n_diff', 'action', 'note', 'target_txt', 'match_txt']
 SUMMARY_FIELDS = ['sutra', 'jobs', 'empty_jobs', 'reference', 'pages', 'status_5', 'status_4', 'status_3', 'status_2',
-                  'no_status', 'leftover_pages', 'avg_hit2base', 'avg_similar2hit', 'chars', 'same', 'placeholder', 'diff', 'pct_same',
+                  'no_status', 'leftover_pages', 'page_status_before', 'page_status_after', 'pages_improved',
+                  'avg_page_similar_before', 'avg_page_similar_after', 'avg_hit2base', 'avg_similar2hit', 'chars', 'same', 'placeholder', 'diff', 'pct_same',
                   'review_pages']
+
+
+def page_status_summary(rows):
+    """ 整页匹配状态补上音释比对文本前后的汇总：返回(之前的分布, 之后的分布, 状态提高的页数, 页数, 前后平均整页相似率)
+    分布如'5:12 4:30 3:8 2:3 -:1'，'-'是原来没有整页匹配的页。只统计有整页对比的页(page_change有值)"""
+    rs = [r for r in rows if r.get('page_change')]
+
+    def dist(key):
+        c = {}
+        for r in rs:
+            k = r.get(key) if r.get(key) != '' else '-'
+            c[k] = c.get(k, 0) + 1
+        return ' '.join('%s:%s' % (k, c[k]) for k in sorted(c, key=lambda x: -1 if x == '-' else x, reverse=True))
+
+    avg = lambda key: round(sum(r.get(key) or 0 for r in rs) / len(rs), 3) if rs else ''
+    return (dist('page_status_before'), dist('page_status_after'), sum(1 for r in rs if r['page_change'] == 'improved'),
+            len(rs), avg('page_r_similar_before'), avg('page_r_similar_after'))
 
 
 def summarize_sutras(rows):
@@ -502,6 +522,7 @@ def summarize_sutras(rows):
     out = []
     for sutra, rs in groups.items():
         with_status = [r for r in rs if r.get('status')]
+        ps = page_status_summary(rs)
         rated = [r for r in with_status if r.get('r_hit2base') is not None]  # 跳过已完成的页没有匹配率
         n = len(rated)
         same = sum(r.get('n_same') or 0 for r in rs)
@@ -521,6 +542,8 @@ def summarize_sutras(rows):
             'status_2': sum(1 for r in with_status if r['status'] == 2),
             'no_status': len([r for r in rs if r.get('page') and not r.get('status')]),
             'leftover_pages': sum(1 for r in rs if r.get('leftover_chars')),
+            'page_status_before': ps[0], 'page_status_after': ps[1], 'pages_improved': ps[2],
+            'avg_page_similar_before': ps[4], 'avg_page_similar_after': ps[5],
             'avg_hit2base': round(sum(r['r_hit2base'] for r in rated) / n, 3) if n else '',
             'avg_similar2hit': round(sum(r['r_similar2hit'] or 0 for r in rated) / n, 3) if n else '',
             'chars': sum(r.get('n_chars') or 0 for r in rs),
@@ -599,9 +622,58 @@ def rescue_leftovers(page, t, vdict, index_id, first_match, ref_txt):
             [m for _, _, m in sorted(rescued)])
 
 
-def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, force=False, spans=None):
+PAGE_MATCH_FIELDS = ['page_chars', 'page_match_from', 'page_status_before', 'page_status_after', 'page_change',
+                      'page_r_hit_before', 'page_r_hit_after', 'page_r_similar_before', 'page_r_similar_after']
+
+
+def page_match_change(page, index_id, log, applied):
+    """ 整页匹配状态在补上音释比对文本前后的对比，不写库
+    整页状态(page.match)是各条match_logs里最好的一条，每条都拿整页文本去比：思溪藏页的音释字不在cbeta里，
+    这些字算作没匹配上，拉低整页状态。音释字得到福州藏的比对文本后，把这些字的命中数加到整页原有的命中数上，
+    按平台自己的规则(get_status)重新算状态，再和原有的最好一条比，取更好的。
+    index_id：本工具写入的日志id，计算“之前”时不算这一条。log：本页音释的匹配日志。applied：这条日志会不会被填入cmp_txt，
+    没填就等于没变化。假设整页原有的命中里不含音释字，命中数以整页字数封顶。
+    返回PAGE_MATCH_FIELDS里的字段
+    """
+    from web.tw.match import get_best_match, get_status
+    others = [dict(x) for x in page.get('match_logs') or [] if x.get('index_id') != index_id]
+    prev = get_best_match(others)
+    if not prev and isinstance(page.get('match'), dict) and page['match'].get('index_id') != index_id:
+        prev = dict(page['match'])
+    prev = prev or {}
+    base_len = prev.get('len_base_txt') or len(_select_all(page))
+
+    def count(d, key, ratio_key):  # 字数：优先用记录里的字数，没有就用比例推算
+        return d[key] if d.get(key) is not None else round((d.get(ratio_key) or 0) * base_len)
+
+    before = {'status': prev.get('status'), 'r_hit2base': prev.get('r_hit2base'),
+              'r_similar2base': prev.get('r_similar2base')}
+    after = before
+    if applied and base_len:
+        hit = min(base_len, count(prev, 'len_hit', 'r_hit2base') + (log.get('len_hit') or 0))
+        similar = min(hit, count(prev, 'len_similar', 'r_similar2base') + (log.get('len_similar') or 0))
+        r_hit, r_sim2base = round(hit / base_len, 3), round(similar / base_len, 3)
+        r_sim2hit = round(similar / hit, 3) if hit else 0
+        r_match = round(((prev.get('len_match_txt') or 0) + (log.get('len_match_txt') or 0)) / base_len, 3)
+        combined = {'status': get_status(r_match, r_sim2hit, r_hit, page.get('base_txt') or ''),
+                    'r_hit2base': r_hit, 'r_similar2hit': r_sim2hit, 'r_similar2base': r_sim2base}
+        best = get_best_match([dict(prev), combined] if prev.get('status') else [combined])
+        after = best if best is combined else before
+    change = 'not applied' if not applied else (
+        'improved' if (after.get('status') or 0) > (before.get('status') or 0) else 'same status')
+    pick = lambda d, k: d.get(k) if d.get(k) is not None else ''
+    return {'page_chars': base_len, 'page_match_from': prev.get('index_id') or '',
+            'page_status_before': pick(before, 'status'), 'page_status_after': pick(after, 'status'),
+            'page_change': change,
+            'page_r_hit_before': pick(before, 'r_hit2base'), 'page_r_hit_after': pick(after, 'r_hit2base'),
+            'page_r_similar_before': pick(before, 'r_similar2base'),
+            'page_r_similar_after': pick(after, 'r_similar2base')}
+
+
+def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, force=False, spans=None, min_status=3):
     """ 为一页目标音释字在参考文本里查找匹配。返回(报告行, match_log或None)，不写库
     spans是build_reference_txt给出的各页位置，有则在报告和日志里记下匹配文本来自参考的哪些页/卷
+    min_status：报告里整页状态的前后对比按“状态不低于它才会填入cmp_txt”来算
     """
     from util.find_match import find_best_match
     from web.tw.match import get_match_info
@@ -637,6 +709,7 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
     if leftover:
         row.update(leftover_chars=leftover, note='leftover pass: +%s chars' % leftover)
         log['leftover_chars'] = leftover
+    row.update(page_match_change(page, index_id, log, info['status'] >= min_status))
     if spans is not None:
         hits, notes = [], []
         for piece in pieces:
@@ -677,10 +750,11 @@ def _cmp_changes(page, ordered, proxies):
 
 
 def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commit=False, force=False, set_page_match=False,
-              mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
+              min_status=3, mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
     """ 在窗口内为目标页查找参考文本，写入match_logs（index_id见DIRECTIONS）。
     默认预演不写库；已有完全匹配(status=5)的页跳过，force可重跑；
     默认不改page.match(音释文本占比会扭曲整页状态)，set_page_match可开启
+    min_status：只用于报告里整页状态前后对比(page_status_after)，假设状态不低于它的页才会填入cmp_txt；match本身不受它影响
     """
     import helper as hlp
     from web.tw.match import get_best_match
@@ -707,7 +781,7 @@ def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commi
         for name in sorted_page_names(targets):
             page = targets[name]['page']
             row, log = _match_target(job['id'], name, targets[name], ref_txt, vdict, index_id,
-                                     job['reference_reels'], force, spans)
+                                     job['reference_reels'], force, spans, min_status)
             if log is not None:
                 logs = [l for l in page.get('match_logs') or [] if l.get('index_id') != index_id] + [log]
                 if commit:
@@ -753,6 +827,7 @@ def run_apply(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', min_s
             if status != 'ok':
                 report.append(dict(row, action=status, status=log and log.get('status')))
                 continue
+            row.update(page_match_change(page, index_id, log, True))
             changes = _cmp_changes(page, ordered, proxies)
             if commit and changes:
                 dbh.page.update_one({'_id': page['_id']},
@@ -781,11 +856,13 @@ def _sutra_of(job):
 
 
 def _sutra_line(r):
-    return ('%s  pages=%s  windows without pages=%s  status 5/4/3/2=%s/%s/%s/%s  no_status=%s  avg hit2base=%s similar2hit=%s  '
-            'yinshi chars=%s; of the applied chars: same=%s placeholder=%s diff=%s (%s%% same)' % (
+    return ('%s  pages=%s  windows without pages=%s  yinshi status 5/4/3/2=%s/%s/%s/%s  no_status=%s  avg hit2base=%s similar2hit=%s  '
+            'yinshi chars=%s; of the applied chars: same=%s placeholder=%s diff=%s (%s%% same)  '
+            'whole-page status %s -> %s (improved %s, avg similar2base %s -> %s)' % (
                 r['sutra'], r['pages'], len(r['empty_jobs'].split(',')) if r['empty_jobs'] else 0, r['status_5'], r['status_4'], r['status_3'], r['status_2'], r['no_status'],
                 r['avg_hit2base'], r['avg_similar2hit'], r['chars'], r['same'], r['placeholder'], r['diff'],
-                r['pct_same']))
+                r['pct_same'], r['page_status_before'], r['page_status_after'], r['pages_improved'],
+                r['avg_page_similar_before'], r['avg_page_similar_after']))
 
 
 def run_preview(sutra='', direction=DEFAULT_DIRECTION, db='tw-test-readonly', min_status=3, detail=True, overwrite=False,
@@ -827,6 +904,9 @@ def run_preview(sutra='', direction=DEFAULT_DIRECTION, db='tw-test-readonly', mi
                     direction, sorted(sutras) or 'all', db),
                 'jobs=%s  pages=%s  status distribution (2 no match .. 5 exact): %s' % (
                     len(jobs), len([r for r in rows if r.get('page')]), dict(sorted(stats.items()))),
+                'whole-page match status before -> after the yinshi cmp_txt is added (pages with a yinshi match): '
+                '%s -> %s; improved %s of %s pages; avg whole-page similar2base %s -> %s' % (
+                    (lambda t: (t[0] or '-', t[1] or '-', t[2], t[3], t[4], t[5]))(page_status_summary(rows))),
                 'legend: txt = the target char, cmp = cmp_txt that would be filled, ＾ = differs (■ = no counterpart)',
                 'files: summary_by_sutra.csv (one row per sutra), pages.csv (one row per page, with the source '
                 'reels/pages), <sutra>.txt (column by column)', '', 'per sutra:'] + [_sutra_line(r) for r in summary]
@@ -880,7 +960,7 @@ def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats
         t = targets[name]
         page = t['page']
         row, log = _match_target(job['id'], name, t, ref_txt, vdict, index_id, job['reference_reels'], force=True,
-                                 spans=spans)
+                                 spans=spans, min_status=min_status)
         base_txt, _ = page_text(page, t['idx'], vdict)
         row['target_txt'] = base_txt.replace('\n', '/')
         head = '=== %s | method=%s | chars=%s' % (name, row['method'], row['n_chars'])
