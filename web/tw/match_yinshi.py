@@ -63,30 +63,31 @@ def build_yinshi_windows(mapping_rows, existing_z):
     mapping_rows: [(福州藏卷编码, 思溪藏卷编码或None)]，按对照表原有顺序（x卷、正卷、z卷）
     existing_z: {z卷编码: reel_type}，库里实际存在的福州藏z卷。表里有但库里没有的z卷直接忽略，
         既没有窗口，也不作为分界（如疑似错误的 FZ0001_120z1）
-    规则：z卷覆盖同一经中上一个（存在的）z卷之后的所有卷。返回(windows, skipped_z)
+    规则：z卷覆盖对照表里上一个（存在的）z卷之后的所有卷，不分经号：如FZ0069_001到FZ0071_005都由FZ0071_005z1覆盖
+        返回(windows, skipped_z)
         windows: {z卷: {'fz_reels': [...], 'sx_reels': [...], 'reel_type': ...}}
     """
     windows, skipped = {}, []
-    pending = {}  # 经号 -> 上个z卷之后收集到的[(福州藏卷, 思溪藏卷)]
-    last = {}  # 经号 -> (锚点卷序号, 上个窗口的行)，用于同一卷后的z1/z2共用窗口
-    shared = {}  # (经号, 锚点卷序号) -> [共用同一窗口的z卷]，以及它们各自在表里的思溪藏音释卷
+    pending = []  # 上个z卷之后收集到的[(福州藏卷, 思溪藏卷)]，跨经号
+    last = None  # (锚点卷编码前缀, 上个窗口的行)，用于同一卷后的z1/z2共用窗口
+    shared = {}  # 锚点卷编码前缀 -> [共用同一窗口的z卷]，以及它们各自在表里的思溪藏音释卷
     for fz, sx in mapping_rows:
-        sutra = fz.split('_')[0]
         m = Z_REEL_RE.match(fz)
         if not m:
-            pending.setdefault(sutra, []).append((fz, sx))
+            pending.append((fz, sx))
             continue
         if fz not in existing_z:
             skipped.append(fz)
             continue
-        rows = pending.get(sutra, [])
-        if not rows and sutra in last and last[sutra][0] == m.group(2):
-            rows = last[sutra][1]
-        last[sutra] = (m.group(2), rows)
-        pending[sutra] = []
+        anchor = (m.group(1), m.group(2))
+        rows = pending
+        if not rows and last and last[0] == anchor:
+            rows = last[1]
+        last = (anchor, rows)
+        pending = []
         windows[fz] = {'fz_reels': [a for a, _ in rows], 'sx_reels': [b for _, b in rows if b],
                        'reel_type': existing_z[fz]}
-        group = shared.setdefault((sutra, m.group(2)), {'zs': [], 'own_sx': []})
+        group = shared.setdefault(anchor, {'zs': [], 'own_sx': []})
         group['zs'].append(fz)
         if sx and sx not in group['own_sx']:  # 思溪藏自己也有音释卷(z1)
             group['own_sx'].append(sx)
