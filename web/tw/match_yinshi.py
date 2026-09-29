@@ -516,8 +516,8 @@ SUMMARY_FIELDS = ['sutra', 'jobs', 'empty_jobs', 'reference', 'pages', 'status_5
 
 def page_status_summary(rows):
     """ 整页匹配状态补上音释比对文本前后的汇总：返回(之前的分布, 之后的分布, 状态提高的页数, 页数, 前后平均整页相似率, 会填入cmp_txt的页数)
-    分布如'5:12 4:30 3:8 2:3 -:1'，'-'是原来没有整页匹配的页。只统计有整页对比的页(page_change有值)"""
-    rs = [r for r in rows if r.get('page_change')]
+    分布如'5:12 4:30 3:8 2:3 -:1'，'-'是原来没有整页匹配的页。只统计有音释状态的页(page_change有值，且不是NO_YINSHI_STATUS)"""
+    rs = [r for r in rows if r.get('page_change') and r['page_change'] != NO_YINSHI_STATUS]
 
     def dist(key):
         c = {}
@@ -658,41 +658,24 @@ def _prev_page_match(page, index_id):
 
 
 def page_match_change(page, index_id, log, applied):
-    """ 整页匹配状态在补上音释比对文本前后的对比，不写库
-    整页状态(page.match)是各条match_logs里最好的一条，每条都拿整页文本去比：思溪藏页的音释字不在cbeta里，
-    这些字算作没匹配上，拉低整页状态。音释字得到福州藏的比对文本后，把这些字的命中数加到整页原有的命中数上，
-    按平台自己的规则(get_status)重新算状态，再和原有的最好一条比，取更好的。
-    index_id：本工具写入的日志id，计算“之前”时不算这一条。log：本页音释的匹配日志。applied：这条日志会不会被填入cmp_txt，
-    没填就等于没变化，但整页原来完全没有匹配的页例外：音释匹配是它现在唯一的匹配，照样按它重新算状态。
-    假设整页原有的命中里不含音释字，命中数以整页字数封顶。
+    """ 音释页的整页匹配状态，只按音释字算，不与页原有的整页匹配(cbeta等)合并，不写库
+    “之后”就是本页音释匹配日志(log)自己的状态和命中比例(get_match_info只拿音释字去比得到)；
+    “之前”是页原有的最好一条整页匹配，仅供对比。
+    index_id：本工具写入的日志id，计算“之前”时不算这一条。log：本页音释的匹配日志。
+    applied：这条日志会不会被填入cmp_txt，没填时page_change为not applied，状态仍是音释自己的状态。
     返回PAGE_MATCH_FIELDS里的字段
     """
-    from web.tw.match import get_best_match, get_status
     prev = _prev_page_match(page, index_id)
     base_len = prev.get('len_base_txt') or len(_select_all(page))
-
-    def count(d, key, ratio_key):  # 字数：优先用记录里的字数，没有就用比例推算
-        return d[key] if d.get(key) is not None else round((d.get(ratio_key) or 0) * base_len)
-
     before = {'status': prev.get('status'), 'r_hit2base': prev.get('r_hit2base'),
               'r_similar2base': prev.get('r_similar2base')}
-    after = before
-    if (applied or prev.get('status') is None) and base_len:
-        hit = min(base_len, count(prev, 'len_hit', 'r_hit2base') + (log.get('len_hit') or 0))
-        similar = min(hit, count(prev, 'len_similar', 'r_similar2base') + (log.get('len_similar') or 0))
-        r_hit, r_sim2base = round(hit / base_len, 3), round(similar / base_len, 3)
-        r_sim2hit = round(similar / hit, 3) if hit else 0
-        # get_status把“匹配文本长度不小于整页的2倍”当作不匹配。原有匹配文本可能是不相干的一段(长度常接近整页，
-        # 状态2的页尤其如此)，把它的长度加上音释匹配文本的长度会误超过2倍，所以匹配文本长度按命中字数算
-        combined = {'status': get_status(r_hit, r_sim2hit, r_hit, page.get('base_txt') or ''),
-                    'r_hit2base': r_hit, 'r_similar2hit': r_sim2hit, 'r_similar2base': r_sim2base}
-        prev_hit, prev_similar = count(prev, 'len_hit', 'r_hit2base'), count(prev, 'len_similar', 'r_similar2base')
-        earlier = dict({'r_similar2base': round(prev_similar / base_len, 3),  # 旧记录缺比例时按字数补上，比较要用
-                        'r_similar2hit': round(prev_similar / prev_hit, 3) if prev_hit else 0}, **prev)
-        best = get_best_match([earlier, combined] if prev.get('status') else [combined])
-        after = best if best is combined else before
-    change = 'not applied' if not applied else (
-        'improved' if (after.get('status') or 0) > (before.get('status') or 0) else 'same status')
+    after = {k: log.get(k) for k in before}
+    if not applied:
+        change = 'not applied'
+    elif (after['status'] or 0) > (before['status'] or 0):
+        change = 'improved'
+    else:
+        change = 'same status' if (after['status'] or 0) == (before['status'] or 0) else 'lower'
     pick = lambda d, k: d.get(k) if d.get(k) is not None else ''
     return {'page_chars': base_len, 'page_match_from': prev.get('index_id') or '',
             'page_status_before': pick(before, 'status'), 'page_status_after': pick(after, 'status'),
@@ -1063,15 +1046,18 @@ def load_report_rows(csv_path):
     return rows
 
 
-def unchanged_page_status(page, index_id):
-    """ 没有音释匹配(或没填cmp_txt)的页：整页状态前后一样，就是页原有的整页匹配"""
+NO_YINSHI_STATUS = 'no yinshi status'  # page_change的取值：这页没有音释匹配，算不出音释状态
+
+
+def no_yinshi_status(page, index_id):
+    """ 没有音释匹配的页：音释状态算不出，之后一栏留空(不显示页原有的状态)，之前一栏仍给页原有的整页匹配作参考"""
     prev = _prev_page_match(page, index_id)
     pick = lambda k: prev[k] if prev.get(k) is not None else ''
     return {'page_chars': prev.get('len_base_txt') or len(page.get('base_txt') or ''),
             'page_match_from': prev.get('index_id') or '',
-            'page_status_before': pick('status'), 'page_status_after': pick('status'), 'page_change': 'unchanged',
-            'page_r_hit_before': pick('r_hit2base'), 'page_r_hit_after': pick('r_hit2base'),
-            'page_r_similar_before': pick('r_similar2base'), 'page_r_similar_after': pick('r_similar2base')}
+            'page_status_before': pick('status'), 'page_status_after': '', 'page_change': NO_YINSHI_STATUS,
+            'page_r_hit_before': pick('r_hit2base'), 'page_r_hit_after': '',
+            'page_r_similar_before': pick('r_similar2base'), 'page_r_similar_after': ''}
 
 
 def names_to_lookup(epages, rows):
@@ -1098,7 +1084,7 @@ def combine_page_status(epages, rows, docs, index_id):
             item.update({k: r.get(k, '') for k in PAGE_MATCH_FIELDS},
                         coverage='not_applied' if r['page_change'] == 'not applied' else 'applied')
         elif name in docs:
-            item.update(unchanged_page_status(docs[name], index_id), coverage='no_match' if r else 'not_in_sheet',
+            item.update(no_yinshi_status(docs[name], index_id), coverage='no_match' if r else 'not_in_sheet',
                         note=r.get('action', ''))
         else:
             item.update(coverage='no_page', note='page not in DB')
@@ -1110,7 +1096,7 @@ def status_transitions(table):
     """ 整页状态(前, 后)的页数：{('4', '5'): 12}，'-'是没有整页匹配。只统计有状态对比的页"""
     out = {}
     for r in table:
-        if r.get('page_change'):
+        if r.get('page_change') and r['page_change'] != NO_YINSHI_STATUS:
             key = tuple('-' if r[k] == '' else str(r[k]) for k in ('page_status_before', 'page_status_after'))
             out[key] = out.get(key, 0) + 1
     return out
@@ -1120,18 +1106,21 @@ def page_status_head(table, db, reel_regex):
     """ summary.txt的内容：总览、按coverage分的前后分布、状态转移表"""
     total = page_status_summary(table)
     lines = ['page_status  db=%s  yinshi (E) pages in reels matching %r  (read-only, nothing written)' % (db, reel_regex),
-             'pages=%s  whole-page status before -> after: %s -> %s; improved %s pages; avg whole-page similar2base %s -> %s' % (
-                 len(table), total[0] or '-', total[1] or '-', total[2], total[4], total[5]),
+             'pages=%s (%s with a yinshi status)  whole-page status before -> after(yinshi only): %s -> %s; improved %s pages; '
+             'avg similar2base %s -> %s' % (
+                 len(table), total[3], total[0] or '-', total[1] or '-', total[2], total[4], total[5]),
              'whole-page status: 0 = too short to search, 1 = nothing found, 2 = no match, 3 = medium, 4 = high, '
              '5 = exact; "-" = no whole-page match at all',
              'coverage: applied = yinshi cmp_txt would be filled, status recalculated with it; not_applied = yinshi matched '
              'but below --min_status; no_match = inside the sheet but no yinshi match; not_in_sheet = not covered by the '
-             'sheets, unchanged; no_page = not in the DB', '', 'by coverage:']
+             'sheets; no_page = not in the DB. The last three have no yinshi status (shown as blank/-), and are left out of '
+             'the before -> after counts and transitions below', '', 'by coverage:']
     for c in COVERAGES:
         rs = [r for r in table if r['coverage'] == c]
         if rs:
             s = page_status_summary(rs)
-            lines.append('  %-12s %6s pages  %s -> %s  improved %s' % (c, len(rs), s[0] or '-', s[1] or '-', s[2]))
+            lines.append('  %-12s %6s pages  %s' % (c, len(rs), (
+                '%s -> %s  improved %s' % (s[0] or '-', s[1] or '-', s[2])) if s[3] else 'no yinshi status'))
     lines += ['', 'status transitions (before -> after: pages):']
     order = lambda x: -1 if x == '-' else int(x)
     for (b, a), n in sorted(status_transitions(table).items(), key=lambda kv: (-order(kv[0][0]), -order(kv[0][1]))):
