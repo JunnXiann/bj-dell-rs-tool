@@ -41,10 +41,9 @@ DIRECTIONS = {
 }
 DEFAULT_DIRECTION = 'sx2fz'
 EMPTY_REEL_TYPES = ('空卷', '音释（缺）')
-# find_best_match要求至少10字的连续同文才算匹配，更短的音释改用find_short_match
-SHORT_TXT_LEN = 30  # 页音释字数不超过该值才启用
-SHORT_MIN_SCORE = 80  # 最佳位置的相似度(0-100)至少达到该值
-SHORT_MIN_GAP = 10  # 最佳位置比其它位置至少高出该值，重复出现的文本(如“第N卷不出字”)因此不匹配
+# find_best_match默认要求至少10字的连续同文才算匹配。音释常常很短，所以默认没找到匹配的页，再不限同文长度(MIN_SAME_RETRY)找一次；
+# 两次都去掉匹配文本末尾多出来的字(trim_tail)。是否算匹配由get_match_info按平台的规则(命中率、相似率)算出状态
+MIN_SAME_RETRY = 1
 # 首次匹配只认顺序一致的最长一段；同一页里两块文字前后颠倒时，另一块会被留下，因此再单独找一次
 LEFTOVER_MIN_LEN = 10  # 连续没有对应文本的字数不少于该值才单独再找
 LEFTOVER_MAX_TRIES = 30  # 每页补找时最多调用几次查找
@@ -454,25 +453,6 @@ def run_plan(db='tw-test-readonly', direction=DEFAULT_DIRECTION, with_counts=Fal
     logging.info('windows=%s jobs(%s)=%s reconcile issues=%s' % (len(windows), direction, len(jobs), len(recon)))
 
 
-def find_short_match(base_txt, ref_txt):
-    """ 在参考文本里为很短的音释找匹配文本；找不到或有多处同样好的位置时返回''
-    逐字滑动窗口(窗口长度=base字数)比较，最佳位置须足够像，且明显好于不重叠的其它位置
-    """
-    from rapidfuzz import fuzz
-    base = base_txt.replace('\n', '')
-    pos = [i for i, c in enumerate(ref_txt) if c != '\n']  # 去掉换行后各字在ref_txt里的位置
-    ref = ''.join(ref_txt[i] for i in pos)
-    n = len(base)
-    if not n or len(ref) < n:
-        return ''
-    scores = [fuzz.ratio(base, ref[i:i + n]) for i in range(len(ref) - n + 1)]
-    best = max(range(len(scores)), key=scores.__getitem__)
-    rival = max([s for i, s in enumerate(scores) if abs(i - best) >= n] or [0])
-    if scores[best] < SHORT_MIN_SCORE or scores[best] - rival < SHORT_MIN_GAP:
-        return ''
-    return ref_txt[pos[best]:pos[best + n - 1] + 1]
-
-
 def _own_log(page, index_id):
     return next((l for l in page.get('match_logs') or [] if l.get('index_id') == index_id), None)
 
@@ -703,9 +683,10 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
     if own and own.get('status') == 5 and not force:
         return dict(row, action='skipped_done', status=5), None
     try:
-        match_txt, by = find_best_match(base_txt, ref_txt)[0], 'find_best_match'
-        if not match_txt.strip() and len(ordered) <= SHORT_TXT_LEN:
-            match_txt, by = find_short_match(base_txt, ref_txt), 'short'
+        match_txt, by = find_best_match(base_txt, ref_txt, trim_tail=True)[0], 'find_best_match'
+        if not match_txt.strip():  # 没有10字以上的连续同文：不限同文长度再找一次，任何字数的页都一样
+            match_txt = find_best_match(base_txt, ref_txt, min_same=MIN_SAME_RETRY, trim_tail=True)[0]
+            by = 'min_same_retry' if match_txt.strip() else by  # 还是没找到就不标记
         pieces, leftover = [match_txt], 0  # pieces：匹配文本由参考文本里哪几段拼成，用于查来源页
         if by == 'find_best_match' and match_txt.strip():
             new_txt, leftover, found = rescue_leftovers(page, t, vdict, index_id, match_txt, ref_txt)
@@ -719,9 +700,9 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
                reference_reels=reference_reels, method=row['method'], found_by=by)
     row.update(status=info['status'], r_hit2base=info['r_hit2base'], r_similar2hit=info['r_similar2hit'],
                r_similar2base=info['r_similar2base'], len_match_txt=info['len_match_txt'])
-    if by == 'short':
-        row['note'] = 'short text search'
     row['found_by'] = by
+    if by == 'min_same_retry':
+        row['note'] = 'found without min same length'
     if leftover:
         row.update(leftover_chars=leftover, note='leftover pass: +%s chars' % leftover)
         log['leftover_chars'] = leftover
@@ -1004,8 +985,6 @@ def _preview_job(job, dbh, vdict, index_id, min_status, detail, out, rows, stats
         stats[log['status']] = stats.get(log['status'], 0) + 1
         row['match_txt'] = log['match_txt'].replace('\n', '/')
         head += ' | status=%s hit2base=%s similar2hit=%s' % (log['status'], log['r_hit2base'], log['r_similar2hit'])
-        if log.get('found_by') == 'short':
-            head += ' [short text search]'
         if log.get('leftover_chars'):
             head += ' [leftover pass +%s chars]' % log['leftover_chars']
         head += (' | matched %s: %s' % (row['source_reels'], row['source_pages'])

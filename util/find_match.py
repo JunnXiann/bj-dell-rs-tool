@@ -53,7 +53,7 @@ def get_stat_info(segments, start, end):
     return {'base': base_info, 'cmp': cmp_info}
 
 
-def check_match(segments):
+def check_match(segments, min_same=10, trim_tail=False):
     """ 检查segments匹配情况
     一、现象分析
     如果两段文本非常匹配，只有少量由于异体字或者个别字的增删改造成的不同，那么diff得到的
@@ -69,6 +69,9 @@ def check_match(segments):
     3. 中同文：如果当前匹配状态为True，则设置状态为True，否则不做设置
     3. 中异文：如果当前匹配状态为False，则设置状态为False，否则不做设置
     * 针对前几条segment，如果某条segment base长度小于15而cmp不匹配的长度大于30，这条之前都作为不匹配
+    min_same：长同文的最短长度，默认10。音释这类很短的文本可以调小(如1)，让不足10字的同文也算匹配的依据
+    trim_tail：默认False。为True时去掉匹配范围末尾base为空的segment(即被查找文本已结束，cmp里多出来的字)。
+        短异文随当前匹配状态，查找窗口又比被查找文本长，短文本的匹配结果末尾会多带上至多3个无关的字，使匹配文本长度大于被查找文本
     """
     # 检查前10条，寻找关键不匹配segment，在此之前都作为不匹配
     limit = 10
@@ -88,7 +91,7 @@ def check_match(segments):
         if i < last:
             continue
         if seg['is_same']:  # 同文
-            if len(seg['base']) >= 10:  # 长同文
+            if len(seg['base']) >= min_same:  # 长同文
                 curr_status = seg['match'] = True
             elif len(seg['base']) <= 3:  # 短同文
                 seg['match'] = curr_status
@@ -122,6 +125,11 @@ def check_match(segments):
             start -= 1
         else:
             break
+    # 被查找文本已经结束，后面cmp里多出来的字不属于匹配
+    if trim_tail:
+        while end - 1 > start and segments[end - 1]['base'] == '':
+            segments[end - 1]['match'] = False
+            end -= 1
     # 如果start的base为空，则往后移一个
     if segments[start]['base'] == '':
         segments[start]['match'] = False
@@ -141,7 +149,7 @@ def check_match(segments):
     return segments, start, end
 
 
-def exact_find_match(txt1, txt2, refind=True):
+def exact_find_match(txt1, txt2, refind=True, min_same=10, trim_tail=False):
     """ 从txt2中查找与txt1最匹配的文本，txt2比txt1略长（不超过txt1长度的3倍）
     算法设计思路：
     1. 利用diff函数比较两段文本，得到segments
@@ -154,7 +162,7 @@ def exact_find_match(txt1, txt2, refind=True):
     # 进行diff比对
     segments = diff(txt1, txt2, not_newline, not_newline_and_pagecode)
     # 检查segments匹配情况
-    segments, start, end = check_match(segments)
+    segments, start, end = check_match(segments, min_same, trim_tail)
     # 针对长异文进行二次查找
     refind_len = 0
     long_mismatch_segs = [s for s in segments[start:end] if not s.get('match') and abs(s['len_diff']) > 10]
@@ -251,8 +259,8 @@ def fuzzy_find_match(txt1, txt2, max_steps=10000, long_cut=True):
     return match_segment, best_score, start
 
 
-def find_best_match(txt1, txt2, refinded=True):
-    """ 从txt2中找到与txt1最匹配的文本"""
+def find_best_match(txt1, txt2, refinded=True, min_same=10, trim_tail=False):
+    """ 从txt2中找到与txt1最匹配的文本。min_same、trim_tail见check_match"""
     if not txt2:
         return '', {'base': {'match_ratio': 0}}, False, []
 
@@ -263,7 +271,7 @@ def find_best_match(txt1, txt2, refinded=True):
     # 精确查找匹配的文本段
     # exact_find_match会回调find_best_match
     # 要用到find_best_match返回值的match_txt, long_mismatch_segs
-    ret = exact_find_match(txt1, fuzzy_txt, refinded)
+    ret = exact_find_match(txt1, fuzzy_txt, refinded, min_same, trim_tail)
 
     return ret
 
