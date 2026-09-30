@@ -835,12 +835,14 @@ def check_and_export(out_path='./log/page_issues.csv', batch_size=500, group_siz
     print(f'Issues logged to: {out_path}')
 
 
-def apply_txt2missingchars(db, page, index_id='fz_yinshi_match', field='cmp_txt', chars=None):
+def apply_txt2missingchars(db, page, index_id='fz_yinshi_match', field='cmp_txt', chars=None, keep_insertions=False):
     """
     Finds a specific match_log and fills missing character fields
     without overwriting existing valid text.
     chars: optional list of char dicts (in reading order, taken from page['chars']) to align against
     instead of all non-center chars, so only that subset (e.g. yinshi chars) is filled.
+    keep_insertions: match text that has no base char (an extra char in the match) is dropped by default.
+    If True, it is appended to the previous box's text when that box was filled by this call (so a box may hold 2 chars).
     """
     # 1. Find the target log
     target_log = next((log for log in page.get('match_logs', []) if log.get('index_id') == index_id), None)
@@ -879,8 +881,11 @@ def apply_txt2missingchars(db, page, index_id='fz_yinshi_match', field='cmp_txt'
 
     # 5. Selective Update with bounds checking
     start = 0
+    filled = set()  # indices filled by this call
     for seg in segments:
         if not seg.get('base0'):
+            if keep_insertions and seg.get('cmp0') and (start - 1) in filled:
+                chars[start - 1][field] += seg['cmp0']
             continue
 
         len_b = len(seg['base0'])
@@ -915,6 +920,7 @@ def apply_txt2missingchars(db, page, index_id='fz_yinshi_match', field='cmp_txt'
                         chars[updatable_indices[i]][field] = seg['cmp0'][i]
                     else:
                         chars[updatable_indices[i]][field] = '■'
+            filled.update(updatable_indices)
 
         start += len_b
     return True

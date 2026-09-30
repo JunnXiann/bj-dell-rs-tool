@@ -735,7 +735,7 @@ def _fill_cmp(page, t, index_id, vdict, log=None, min_status=3, overwrite=False)
     proxies = [{'txt': norm_char(page['chars'][i], vdict),
                 'cmp_txt': None if overwrite else page['chars'][i].get('cmp_txt')} for i in ordered]
     view = dict(page, match_logs=[log])
-    if not apply_txt2missingchars(None, view, index_id=index_id, field='cmp_txt', chars=proxies):
+    if not apply_txt2missingchars(None, view, index_id=index_id, field='cmp_txt', chars=proxies, keep_insertions=True):
         return 'apply_failed', ordered, []
     return 'ok', ordered, proxies
 
