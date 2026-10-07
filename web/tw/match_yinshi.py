@@ -9,6 +9,7 @@
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
     python match_yinshi.py preview [--sutra=FZ0002] [--direction=fz2sx|sx2fz] [--db=...]   # 只读，出报告；不填sutra=全部经
     python match_yinshi.py page_status [--pages_csv=data/yinshi_match/preview_sx2fz_all-xxx/pages.csv] [--db=...]   # 只读，所有SX音释页整页状态前后对比
+    python match_yinshi.py yinshi_report [--db=...] [--reel_regex=^SX\\d+_]   # 只读，所有SX音释页导出Excel：状态、三个比率、音释原文和cmp_txt
     python match_yinshi.py flag_e --value=20260921111 [--field=flag1] [--reel_regex=^FZ] [--keep_existing] [--not_flag3_date=20260921] [--commit]   # 给思溪藏所有含E格式的页打标记，默认只动SX
     python match_yinshi.py flag_e_undo --report=data/yinshi_match/flag_e-xxx.csv --field=flag1 --value=20260921111 [--commit]   # 按flag_e的报告恢复原值
     python match_yinshi.py plan  [--with_counts]
@@ -1169,6 +1170,90 @@ def run_page_status(min_status=3, db='tw-test-readonly', pages_csv='', reel_rege
     logging.info('reports in %s' % out_dir)
 
 
+REPORT_COLUMNS = [('page', '页名', 16), ('reels', '所在卷', 16), ('match_reels', '匹配的福州藏卷', 20), ('status', '匹配状态', 8),
+                  ('r_hit2base', 'hit2base', 10), ('r_similar2hit', 'similar2hit', 12), ('r_match2base', 'match2base', 12),
+                  ('n_chars', '音释字数', 8), ('base_txt', '音释原文(只含音释)', 50), ('cmp_txt', 'cmp_txt(只含音释)', 50)]
+CMP_EMPTY = '□'  # 报告里还没有cmp_txt的字框
+
+
+def yinshi_report_row(page, idxs, reels, index_id, vdict):
+    """ 一页音释的报告行(REPORT_COLUMNS的键)：状态和三个比率取自本工具写的匹配日志(index_id)，没有日志则留空；
+    音释原文和cmp_txt都只含音释字，一列一行，cmp_txt没有的字框用CMP_EMPTY；一个字框里有多个字(比对文本比页多出字)时原样显示"""
+    base_txt, _ = page_text(page, idxs, vdict)
+    cmp_txt = '\n'.join(''.join(page['chars'][i].get('cmp_txt') or CMP_EMPTY for i in ids)
+                        for _, ids in group_columns(page, idxs))
+    log = _own_log(page, index_id) or {}
+    pick = lambda k: log[k] if log.get(k) is not None else ''
+    return {'page': page['name'], 'reels': ','.join(sorted(reels)), 'match_reels': ','.join(log.get('reference_reels') or []),
+            'status': pick('status'), 'r_hit2base': pick('r_hit2base'), 'r_similar2hit': pick('r_similar2hit'),
+            'r_match2base': pick('r_match2base'), 'n_chars': len(idxs), 'base_txt': base_txt, 'cmp_txt': cmp_txt}
+
+
+def write_report_xlsx(file_path, rows):
+    """ 写Excel：表头冻结、文本列自动换行。openpyxl不接受控制字符，先去掉"""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font
+    bad = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'yinshi pages'
+    ws.append([title for _, title, _ in REPORT_COLUMNS])
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for r in rows:
+        ws.append([bad.sub('', v) if isinstance(v, str) else v for v in (r.get(k, '') for k, _, _ in REPORT_COLUMNS)])
+    wrap = Alignment(wrap_text=True, vertical='top')
+    for col, (key, _, width) in enumerate(REPORT_COLUMNS, 1):
+        ws.column_dimensions[ws.cell(1, col).column_letter].width = width
+        if key in ('base_txt', 'cmp_txt'):
+            for row in ws.iter_rows(min_row=2, min_col=col, max_col=col):
+                row[0].alignment = wrap
+    ws.freeze_panes = 'A2'
+    ws.auto_filter.ref = ws.dimensions
+    wb.save(file_path)
+
+
+def run_yinshi_report(db='tw-test-readonly', reel_regex=SX_REEL_REGEX, report_dir=REPORT_DIR, file_name=''):
+    """ 导出所有思溪藏音释页(含E格式的页，与page_status/flag_e找的页一样)的Excel报告。全程只读库，不写库。
+    每页一行：页名、所在卷、匹配的福州藏卷(取自库里本工具写的匹配日志)、匹配状态(只按音释字算)、
+    hit2base/similar2hit/match2base三个比率、音释字数、音释原文、cmp_txt(都只含音释字)。
+    状态、比率和cmp_txt都是库里现在的值，所以先match/apply写库，再导出才是新结果；没有匹配日志的页状态和比率留空。
+    音释原文是匹配时用的文本：异体字编码已换成正字。
+    输出 report_dir/yinshi_pages-<时间>.xlsx，file_name可指定文件名(--file_name=xxx.xlsx)
+    """
+    import helper as hlp
+    hlp.set_logging('match_yinshi')
+    index_id = DIRECTIONS['sx2fz']['index_id']
+    dbh = hlp.get_db(db)
+    vdict = load_variants()
+    epages = find_e_pages(dbh, reel_regex)
+    reels = sorted({r for rs in epages.values() for r in rs})
+    logging.info('%s pages with E format in %s reels, db=%s' % (len(epages), len(reels), db))
+    rows, seen = [], set()
+    for k, reel in enumerate(reels):
+        targets, _ = collect_yinshi(dbh, [reel], vdict)
+        for name, t in targets.items():
+            if name not in seen:  # 共用页只出一行
+                seen.add(name)
+                rows.append(yinshi_report_row(t['page'], t['idx'], epages.get(name) or [reel], index_id, vdict))
+        if (k + 1) % 200 == 0:
+            logging.info('[%s/%s] reels read, %s pages' % (k + 1, len(reels), len(rows)))
+    rows.sort(key=lambda r: hlp.align_code(r['page']))
+    missing = sorted(set(epages) - seen, key=hlp.align_code)
+    if missing:
+        logging.warning('%s pages with E format were not found in their reels (not in the report), e.g. %s' % (
+            len(missing), missing[:5]))
+    os.makedirs(report_dir, exist_ok=True)
+    out = path.join(report_dir, file_name or 'yinshi_pages-%s.xlsx' % datetime.now().strftime('%Y%m%d-%H%M%S'))
+    write_report_xlsx(out, rows)
+    counts = {}
+    for r in rows:
+        counts[r['status'] if r['status'] != '' else '-'] = counts.get(r['status'] if r['status'] != '' else '-', 0) + 1
+    logging.info('%s pages written to %s; status distribution (- = no match log): %s' % (
+        len(rows), out, dict(sorted(counts.items(), key=lambda kv: str(kv[0])))))
+    return out
+
+
 def check_flag_field(field, allow_plain=False):
     """ 打标记只允许flag1、flag2、flag3这类批次标记字段。平台用flag(无数字)表示页的处理阶段并据此选页(如flag=717)，
     输错成--field=flag会覆盖它，所以打标记时拒绝。恢复(allow_plain=True)时要能把误覆盖的flag写回去，所以放行"""
@@ -1331,4 +1416,5 @@ if __name__ == '__main__':
     import fire
 
     fire.Fire({'plan': run_plan, 'match': run_match, 'apply': run_apply, 'preview': run_preview, 'flag_e': run_flag_e,
-               'flag_e_undo': run_flag_e_undo, 'page_status': run_page_status})
+               'flag_e_undo': run_flag_e_undo, 'page_status': run_page_status,
+               'yinshi_report': run_yinshi_report})
