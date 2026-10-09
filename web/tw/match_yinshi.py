@@ -9,7 +9,7 @@
 用法（默认只预演，加 --commit 才写库；默认库 tw-test-readonly）：
     python match_yinshi.py preview [--sutra=FZ0002] [--direction=fz2sx|sx2fz] [--db=...]   # 只读，出报告；不填sutra=全部经
     python match_yinshi.py page_status [--pages_csv=data/yinshi_match/preview_sx2fz_all-xxx/pages.csv] [--db=...]   # 只读，所有SX音释页整页状态前后对比
-    python match_yinshi.py yinshi_report [--db=...] [--reel_regex=^SX\\d+_]   # 只读，所有SX音释页导出Excel：状态、三个比率、音释原文和cmp_txt
+    python match_yinshi.py yinshi_report [--db=...] [--file_name=xxx.xlsx]   # 只读，匹配任务里所有SX音释页导出Excel：状态、三个比率、音释原文和cmp_txt
     python match_yinshi.py flag_e --value=20260921111 [--field=flag1] [--reel_regex=^FZ] [--keep_existing] [--not_flag3_date=20260921] [--commit]   # 给思溪藏所有含E格式的页打标记，默认只动SX
     python match_yinshi.py flag_e_undo --report=data/yinshi_match/flag_e-xxx.csv --field=flag1 --value=20260921111 [--commit]   # 按flag_e的报告恢复原值
     python match_yinshi.py plan  [--with_counts]
@@ -320,7 +320,7 @@ def _with_retry(fn, tries=3):
 
 
 # 只取匹配用到的字段：字数组里有坐标等大量字段，全取会让每页数据大几倍。数组元素个数和顺序不变，下标仍可用于写库
-PAGE_FIELDS = {'name': 1, 'match': 1, 'base_txt': 1, 'match_logs': 1, 'chars.char_id': 1, 'chars.cid': 1, 'chars.txt': 1, 'chars.cmp_txt': 1,
+PAGE_FIELDS = {'name': 1, 'flag1': 1, 'flag3': 1, 'match': 1, 'base_txt': 1, 'match_logs': 1, 'chars.char_id': 1, 'chars.cid': 1, 'chars.txt': 1, 'chars.cmp_txt': 1,
                'chars.deleted': 1, 'columns.column_id': 1, 'columns.cid': 1, 'columns.is_center': 1,
                'columns.deleted': 1}
 
@@ -1170,30 +1170,20 @@ def run_page_status(min_status=3, db='tw-test-readonly', pages_csv='', reel_rege
     logging.info('reports in %s' % out_dir)
 
 
-REPORT_COLUMNS = [('page', '页名', 16), ('reels', '所在卷', 16), ('match_reels', '匹配的福州藏卷', 20), ('status', '匹配状态', 8),
+NO_FZ_REEL = '无福州藏对应卷'  # 报告分类：没有本工具的匹配日志(不在匹配任务里，或任务没有福州藏参考文本)
+REPORT_COLUMNS = [('page', '页名', 16), ('reels', '所在卷', 16), ('match_reels', '匹配的福州藏卷', 20),
+                  ('category', '分类', 18), ('status', '匹配状态', 8), ('flag3', 'flag3', 14), ('flag1', 'flag1', 14),
                   ('r_hit2base', 'hit2base', 10), ('r_similar2hit', 'similar2hit', 12), ('r_match2base', 'match2base', 12),
-                  ('n_chars', '音释字数', 8), ('base_txt', '音释原文(只含音释)', 50), ('cmp_txt', 'cmp_txt(只含音释)', 50),
-                  ('note', '备注', 40)]
-CMP_EMPTY = '□'  # 报告里还没有cmp_txt的字框
+                  ('n_chars', '音释字数', 8), ('base_txt', '音释原文(只含音释)', 50), ('cmp_txt', 'cmp_txt(福州藏匹配文本)', 50)]
 
 
-def yinshi_report_row(page, idxs, reels, index_id, vdict):
-    """ 一页音释的报告行(REPORT_COLUMNS的键)：状态和三个比率取自本工具写的匹配日志(index_id)，没有日志则留空；
-    音释原文和cmp_txt都只含音释字，一列一行，cmp_txt没有的字框用CMP_EMPTY；一个字框里有多个字(比对文本比页多出字)时原样显示"""
-    base_txt, _ = page_text(page, idxs, vdict)
-    cmp_txt = '\n'.join(''.join(page['chars'][i].get('cmp_txt') or CMP_EMPTY for i in ids)
-                        for _, ids in group_columns(page, idxs))
-    log = _own_log(page, index_id) or {}
-    pick = lambda k: log[k] if log.get(k) is not None else ''
-    return {'page': page['name'], 'reels': ','.join(sorted(reels)), 'match_reels': ','.join(log.get('reference_reels') or []),
-            'status': pick('status'), 'r_hit2base': pick('r_hit2base'), 'r_similar2hit': pick('r_similar2hit'),
-            'r_match2base': pick('r_match2base'), 'n_chars': len(idxs), 'base_txt': base_txt, 'cmp_txt': cmp_txt, 'note': ''}
+def report_category(status):
+    """ 报告分类：有匹配日志的按状态分(文本匹配状态5/4/3/2)，没有日志的是无福州藏对应卷"""
+    return NO_FZ_REEL if status in (None, '') else '文本匹配状态%s' % status
 
 
-def report_missing_pages(db, names, epages, index_id, vdict):
-    """ 按卷找不到的E页，改按页名读库补上报告行，备注写明原因：
-    page not in DB / reel type is empty(空卷、音释（缺）) / E format selects no chars(字被删除、在版心列或字cid不在E格式范围) /
-    outside the reel page range(E格式能选到字，但页不在卷的页码范围内，按卷读不到)"""
+def report_unlisted_pages(db, names, epages, index_id, vdict):
+    """ 含E格式但不在匹配任务里的页(没有福州藏对应卷)：按页名读库，音释字按卷的E格式选，没有匹配日志，状态和cmp_txt留空"""
     docs = {}
     for i in range(0, len(names), 500):
         chunk = names[i:i + 500]
@@ -1202,21 +1192,39 @@ def report_missing_pages(db, names, epages, index_id, vdict):
     rows = []
     for name in names:
         reels, page = epages[name], docs.get(name)
-        if not page:
-            rows.append({'page': name, 'reels': ','.join(sorted(reels)), 'n_chars': 0, 'note': 'page not in DB'})
+        if not page:  # 库里没有这页
+            rows.append({'page': name, 'reels': ','.join(sorted(reels)), 'category': NO_FZ_REEL, 'n_chars': 0})
             continue
-        idxs, empty = set(), []
+        idxs = set()
         for code in reels:
             reel = load_reel(db, code)
-            if reel and reel.get('reel_type') in EMPTY_REEL_TYPES:
-                empty.append(code)
-            elif reel:
+            if reel:
                 idxs.update(_select_by_e(reel, page))
-        row = yinshi_report_row(page, idxs, reels, index_id, vdict)
-        row['note'] = ('reel type is empty: %s' % ','.join(empty) if empty and not idxs else
-                       'outside the reel page range' if idxs else 'E format selects no chars')
-        rows.append(row)
+        rows.append(yinshi_report_row(page, idxs, reels, index_id, vdict))
     return rows
+
+
+def report_summary(rows):
+    """ 各分类的页数[(分类, 页数)]：文本匹配状态5、4、3、2、无福州藏对应卷，最后是Total"""
+    count = {}
+    for r in rows:
+        count[r['category']] = count.get(r['category'], 0) + 1
+    statuses = sorted((c for c in count if c != NO_FZ_REEL), key=lambda c: -int(c[-1]))
+    return [(c, count.get(c, 0)) for c in statuses + [NO_FZ_REEL]] + [('Total', len(rows))]
+
+
+def yinshi_report_row(page, idxs, reels, index_id, vdict):
+    """ 一页音释的报告行(REPORT_COLUMNS的键)：状态、三个比率和cmp_txt都取自本工具写的匹配日志(index_id)，没有日志则留空。
+    cmp_txt就是该日志的match_txt(福州藏的匹配文本)，不读字框里现在的cmp_txt，也不读页的整页匹配——
+    后两者可能不是这个index写的。音释原文只含音释字，一列一行"""
+    base_txt, _ = page_text(page, idxs, vdict)
+    log = _own_log(page, index_id) or {}
+    pick = lambda k: log[k] if log.get(k) is not None else ''
+    return {'page': page['name'], 'reels': ','.join(sorted(reels)), 'match_reels': ','.join(log.get('reference_reels') or []),
+            'category': report_category(log.get('status')), 'flag3': page.get('flag3', ''), 'flag1': page.get('flag1', ''),
+            'status': pick('status'), 'r_hit2base': pick('r_hit2base'), 'r_similar2hit': pick('r_similar2hit'),
+            'r_match2base': pick('r_match2base'), 'n_chars': len(idxs), 'base_txt': base_txt,
+            'cmp_txt': log.get('match_txt') or ''}
 
 
 def write_report_xlsx(file_path, rows):
@@ -1240,17 +1248,25 @@ def write_report_xlsx(file_path, rows):
                 row[0].alignment = wrap
     ws.freeze_panes = 'A2'
     ws.auto_filter.ref = ws.dimensions
+    summary = wb.create_sheet('summary', 0)  # 第一页：各分类页数
+    summary.append(['分类', '页数'])
+    for cell in summary[1]:
+        cell.font = Font(bold=True)
+    for item in report_summary(rows):
+        summary.append(list(item))
+    summary.column_dimensions['A'].width = 24
     wb.save(file_path)
 
 
-def run_yinshi_report(db='tw-test-readonly', reel_regex=SX_REEL_REGEX, mapping=MAPPING_XLSX, report_dir=REPORT_DIR,
-                      file_name=''):
-    """ 导出所有思溪藏音释页(含E格式的页，与page_status/flag_e找的页一样)的Excel报告。全程只读库，不写库。
-    范围与page_status一致：含E格式的页，加上sx2fz匹配任务(对照表窗口)里的思溪藏卷的音释页——后者包括没有E格式、
-    整卷都是音释的思溪藏z卷(如SX0027_001z1)，它们的页没有E格式，只靠E格式找不到。读不到对照表时只有E格式的页。
-    每页一行：页名、所在卷、匹配的福州藏卷(取自库里本工具写的匹配日志)、匹配状态(只按音释字算)、
-    hit2base/similar2hit/match2base三个比率、音释字数、音释原文、cmp_txt(都只含音释字)。
-    状态、比率和cmp_txt都是库里现在的值，所以先match/apply写库，再导出才是新结果；没有匹配日志的页状态和比率留空。
+def run_yinshi_report(db='tw-test-readonly', mapping=MAPPING_XLSX, report_dir=REPORT_DIR, file_name=''):
+    """ 导出所有思溪藏音释页的Excel报告：sx2fz匹配任务(对照表窗口)里的页，加上不在任务里的含E格式的页(与page_status/flag_e
+    找的页一样)。全程只读库，不写库。
+    每页一行：页名、所在卷、匹配的福州藏卷(取自库里本工具写的匹配日志)、分类、匹配状态(只按音释字算)、flag3、flag1、
+    hit2base/similar2hit/match2base三个比率、音释字数、音释原文(只含音释字)、cmp_txt(该日志的match_txt)。
+    分类：文本匹配状态5/4/3/2(按匹配日志的状态)、无福州藏对应卷(没有日志：不在任务里，或任务没有福州藏参考文本)，
+    这两类的状态、比率和cmp_txt留空。summary表给出各分类页数和Total；flag3、flag1是库里页现在的标记值，
+    可与平台里按flag3/flag1筛的结果对照。
+    状态、比率和cmp_txt都是库里匹配日志现在的值，所以先match写库，再导出才是新结果。
     音释原文是匹配时用的文本：异体字编码已换成正字。
     输出 report_dir/yinshi_pages-<时间>.xlsx，file_name可指定文件名(--file_name=xxx.xlsx)
     """
@@ -1259,45 +1275,26 @@ def run_yinshi_report(db='tw-test-readonly', reel_regex=SX_REEL_REGEX, mapping=M
     index_id = DIRECTIONS['sx2fz']['index_id']
     dbh = hlp.get_db(db)
     vdict = load_variants()
-    epages = find_e_pages(dbh, reel_regex)
-    reels = sorted({r for rs in epages.values() for r in rs})
-    try:  # 匹配任务里的思溪藏卷：有的整卷都是音释，没有E格式
-        _, _, _, jobs = _prepare(dbh, 'sx2fz', '', mapping)
-        job_reels = {r for j in jobs for r in j['target_reels'] if not reel_regex or re.search(reel_regex, r)}
-    except FileNotFoundError as e:
-        logging.warning('%s: only pages with E format are in the report' % e)
-        job_reels = set()
-    extra_reels = sorted(job_reels - set(reels))
-    logging.info('%s pages with E format in %s reels, plus %s job reels without E format, db=%s' % (
-        len(epages), len(reels), len(extra_reels), db))
-    reels += extra_reels
+    _, _, _, jobs = _prepare(dbh, 'sx2fz', '', mapping)
+    logging.info('%s sx2fz jobs, db=%s' % (len(jobs), db))
     rows, seen = [], set()
-    for k, reel in enumerate(reels):
-        targets, _ = collect_yinshi(dbh, [reel], vdict)
+    for j, job in enumerate(jobs):
+        targets, _ = collect_yinshi(dbh, job['target_reels'], vdict)
         for name, t in targets.items():
             if name not in seen:  # 共用页只出一行
                 seen.add(name)
-                rows.append(yinshi_report_row(t['page'], t['idx'], epages.get(name) or [reel], index_id, vdict))
-        if (k + 1) % 200 == 0:
-            logging.info('[%s/%s] reels read, %s pages' % (k + 1, len(reels), len(rows)))
+                rows.append(yinshi_report_row(t['page'], t['idx'], t['reels'], index_id, vdict))
+        if (j + 1) % 50 == 0:
+            logging.info('[%s/%s] jobs read, %s pages' % (j + 1, len(jobs), len(rows)))
+    epages = find_e_pages(dbh, SX_REEL_REGEX)  # 含E格式但不在任务里的页：没有福州藏对应卷，也要在报告里
+    unlisted = sorted(set(epages) - seen, key=hlp.align_code)
+    rows += report_unlisted_pages(dbh, unlisted, epages, index_id, vdict)
+    logging.info('%s pages in the jobs + %s E-format pages outside the jobs' % (len(seen), len(unlisted)))
     rows.sort(key=lambda r: hlp.align_code(r['page']))
-    missing = sorted(set(epages) - seen, key=hlp.align_code)
-    if missing:  # 按卷读不到的页：按页名补上，备注原因
-        extra = report_missing_pages(dbh, missing, epages, index_id, vdict)
-        reasons = {}
-        for r in extra:
-            reasons[r['note']] = reasons.get(r['note'], 0) + 1
-        logging.warning('%s pages with E format were not found by reel, added by page name: %s; e.g. %s' % (
-            len(missing), reasons, missing[:10]))
-        rows = sorted(rows + extra, key=lambda r: hlp.align_code(r['page']))
     os.makedirs(report_dir, exist_ok=True)
     out = path.join(report_dir, file_name or 'yinshi_pages-%s.xlsx' % datetime.now().strftime('%Y%m%d-%H%M%S'))
     write_report_xlsx(out, rows)
-    counts = {}
-    for r in rows:
-        counts[r['status'] if r['status'] != '' else '-'] = counts.get(r['status'] if r['status'] != '' else '-', 0) + 1
-    logging.info('%s pages written to %s; status distribution (- = no match log): %s' % (
-        len(rows), out, dict(sorted(counts.items(), key=lambda kv: str(kv[0])))))
+    logging.info('%s pages written to %s; %s' % (len(rows), out, dict(report_summary(rows))))
     return out
 
 
