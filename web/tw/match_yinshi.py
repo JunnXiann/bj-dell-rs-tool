@@ -591,6 +591,18 @@ def leftover_candidates(cols, a, b):
     return sorted(cands, key=lambda c: c[0] - c[1])
 
 
+def yinshi_match_info(base_txt, match_txt):
+    """ 匹配文本match_txt相对音释字base_txt的状态和比率。和get_match_info的区别：不再用平台的check_segments_v3二次裁剪。
+    匹配文本已经由find_best_match按音释的规则裁好；check_segments_v3要求同文长度“大于”10(不是不小于)，
+    整页没有这样的同文时会把最后一段当作多余的丢掉(end=len-1)，正好是音释尾部10字的同文，使整页的尾部漏掉。
+    """
+    from util.diff import diff
+    from util.punc import PUNC_STR
+    from web.tw.match import get_match_info
+    segments = diff(base_txt, match_txt, lambda x: x != '\n', lambda x: x not in f'{PUNC_STR}\n', True, True)
+    return get_match_info(base_txt, match_txt, segments or None)
+
+
 def rescue_leftovers(page, t, vdict, index_id, first_match, ref_txt):
     """ 首次匹配后，把没有对应文本的目标字再单独到参考文本里找，处理同一页两块文字前后顺序颠倒的情况
     返回(新匹配文本, 补找到的字数, [补找到的文本])；没有补找到时原样返回(first_match, 0, [])
@@ -616,7 +628,7 @@ def rescue_leftovers(page, t, vdict, index_id, first_match, ref_txt):
             m2 = find_best_match(run_txt, ref_txt)[0].strip('\n')
             if not m2 or m2 in first_match or any(m2 in r[2] for r in rescued):  # 没找到，或就是已经用过的那段
                 continue
-            if get_match_info(run_txt, m2)['status'] < 3:
+            if yinshi_match_info(run_txt, m2)['status'] < 3:
                 continue
             rescued.append((x, y, m2))
             todo += [(u, v) for u, v in ((a, x), (y, b)) if v - u >= LEFTOVER_MIN_LEN]  # 剩下的两头还可以再找
@@ -695,7 +707,7 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
             new_txt, leftover, found = rescue_leftovers(page, t, vdict, index_id, match_txt, ref_txt)
             if leftover:
                 match_txt, pieces = new_txt, pieces + found
-        info = get_match_info(base_txt, match_txt)
+        info = yinshi_match_info(base_txt, match_txt)
     except Exception as e:  # 单页出错不影响整批
         logging.exception('%s failed' % name)
         return dict(row, action='error', note=str(e)), None
