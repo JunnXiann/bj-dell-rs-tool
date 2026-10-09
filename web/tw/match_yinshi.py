@@ -774,6 +774,9 @@ def _cmp_changes(page, ordered, proxies):
 LOG_STATS = ('r_hit2base', 'r_similar2hit', 'r_match2base', 'r_similar2base')  # 匹配日志里的比率；match2base越接近1越好，其余越大越好
 
 
+MIN_IMPROVE_STATUS = 3  # 状态相同时只有不低于它才算变好：状态2(不匹配)的页换一个同样不匹配的弱匹配没有意义，也不会填入cmp_txt
+
+
 def _stat_gain(name, old, new):
     """ 比率new相对old的变化：>0变好，<0变差，0不变"""
     old, new = old.get(name) or 0, new.get(name) or 0
@@ -791,7 +794,7 @@ def _log_similar2base(log):
 
 def log_improvement(old, new):
     """ 新旧匹配日志比较，返回(是否变好, 变好的指标名列表)
-    变好：状态升高；或状态相同而r_similar2base(相似字占音释字的比例)升高。状态降低一律不算变好。没有旧日志算变好(new)
+    变好：状态升高；或状态相同(不低于MIN_IMPROVE_STATUS)而r_similar2base(相似字占音释字的比例)升高。状态降低一律不算变好。没有旧日志算变好(new)
     hit2base和similar2hit此消彼长(多命中的字会拉低similar2hit)，所以不要求每个比率都不变差
     """
     if not old:
@@ -802,7 +805,7 @@ def log_improvement(old, new):
     new_status, old_status = new.get('status') or 0, old.get('status') or 0
     if new_status > old_status:
         return True, ['status'] + better
-    if new_status == old_status and 'r_similar2base' in better:
+    if new_status == old_status >= MIN_IMPROVE_STATUS and 'r_similar2base' in better:
         return True, better
     return False, better
 
