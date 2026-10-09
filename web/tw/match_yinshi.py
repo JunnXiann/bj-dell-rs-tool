@@ -13,7 +13,7 @@
     python match_yinshi.py flag_e --value=20260921111 [--field=flag1] [--reel_regex=^FZ] [--keep_existing] [--not_flag3_date=20260921] [--commit]   # 给思溪藏所有含E格式的页打标记，默认只动SX
     python match_yinshi.py flag_e_undo --report=data/yinshi_match/flag_e-xxx.csv --field=flag1 --value=20260921111 [--commit]   # 按flag_e的报告恢复原值
     python match_yinshi.py plan  [--with_counts]
-    python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit [--flag_date=20260921]] [--force] [--set_page_match]
+    python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit [--flag_date=20260921]] [--force] [--only_improved [--improved_flag1=202610092035]] [--set_page_match]
     python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--overwrite] [--commit [--flag_date=20260921]]
 
 两个xlsx被.gitignore忽略，需手工拷到本目录：福州藏vs思溪藏卷编码.xlsx、福州藏音释卷编码.xlsx
@@ -489,6 +489,7 @@ REPORT_FIELDS = ['sutra', 'job', 'reference', 'page', 'method', 'n_chars', 'stat
                  'r_similar2base', 'len_match_txt', 'page_chars', 'page_match_from', 'page_status_before',
                  'page_status_after', 'page_change', 'page_r_hit_before', 'page_r_hit_after', 'page_r_similar_before',
                  'page_r_similar_after', 'found_by', 'leftover_chars', 'source_reels', 'source_pages', 'source_note',
+                 'improved_by', 'old_flag1', 'old_status', 'old_r_hit2base', 'old_r_similar2hit', 'old_r_match2base',
                  'applied', 'n_same', 'n_placeholder', 'n_diff', 'action', 'flag', 'note', 'target_txt', 'match_txt']
 SUMMARY_FIELDS = ['sutra', 'jobs', 'empty_jobs', 'reference', 'pages', 'status_5', 'status_4', 'status_3', 'status_2',
                   'no_status', 'leftover_pages', 'page_status_before', 'page_status_after', 'pages_improved',
@@ -684,9 +685,9 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
     if own and own.get('status') == 5 and not force:
         return dict(row, action='skipped_done', status=5), None
     try:
-        match_txt, by = find_best_match(base_txt, ref_txt, trim_tail=True)[0], 'find_best_match'
+        match_txt, by = find_best_match(base_txt, ref_txt, trim_tail=True, edges=True)[0], 'find_best_match'
         if not match_txt.strip():  # 没有10字以上的连续同文：不限同文长度再找一次，任何字数的页都一样
-            match_txt = find_best_match(base_txt, ref_txt, min_same=MIN_SAME_RETRY, trim_tail=True)[0]
+            match_txt = find_best_match(base_txt, ref_txt, min_same=MIN_SAME_RETRY, trim_tail=True, edges=True)[0]
             by = 'min_same_retry' if match_txt.strip() else by  # 还是没找到就不标记
         pieces, leftover = [match_txt], 0  # pieces：匹配文本由参考文本里哪几段拼成，用于查来源页
         if by == 'find_best_match' and match_txt.strip():
@@ -747,14 +748,45 @@ def _cmp_changes(page, ordered, proxies):
             if p.get('cmp_txt') and p['cmp_txt'] != page['chars'][i].get('cmp_txt')}
 
 
+LOG_STATS = ('r_hit2base', 'r_similar2hit', 'r_match2base')  # 匹配日志里的三个比率；match2base越接近1越好，其余越大越好
+
+
+def _stat_gain(name, old, new):
+    """ 比率new相对old的变化：>0变好，<0变差，0不变"""
+    old, new = old.get(name) or 0, new.get(name) or 0
+    if name == 'r_match2base':
+        old, new = -abs(old - 1), -abs(new - 1)
+    return round(new - old, 6)
+
+
+def log_improvement(old, new):
+    """ 新旧匹配日志比较，返回(是否变好, 变好的指标名列表)
+    变好：状态升高；或状态相同，三个比率里至少一个变好且没有一个变差。没有旧日志算变好(new)
+    """
+    if not old:
+        return True, ['new']
+    gains = {n: _stat_gain(n, old, new) for n in LOG_STATS}
+    better = [n for n, g in gains.items() if g > 0]
+    if (new.get('status') or 0) > (old.get('status') or 0):
+        return True, ['status'] + better
+    if (new.get('status') or 0) == (old.get('status') or 0) and better and not any(g < 0 for g in gains.values()):
+        return True, better
+    return False, better
+
+
 def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commit=False, force=False, set_page_match=False,
-              min_status=3, flag_date=None, mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
+              min_status=3, flag_date=None, mapping=MAPPING_XLSX, report_dir=REPORT_DIR, only_improved=False,
+              improved_flag1=''):
     """ 在窗口内为目标页查找参考文本，写入match_logs（index_id见DIRECTIONS）。
     默认预演不写库；已有完全匹配(status=5)的页跳过，force可重跑；
     默认不改page.match(音释文本占比会扭曲整页状态)，set_page_match可开启
     min_status：只用于报告里整页状态前后对比(page_status_after)，假设状态不低于它的页才会填入cmp_txt；match本身不受它影响
     flag_date：写库(--commit)时给被改的页打标记(字段见FLAG_FIELD)用的日期YYYYMMDD，不指定就是今天；
     标记=日期+补上音释比对文本后重新算出的整页匹配状态(0-5)，如20260921004
+    only_improved：只有新日志比库里已有的同index_id日志变好才写库(见log_improvement)，没变好的页不写、不打标记；
+    报告里improved_by列写明哪些指标变好(status/r_hit2base/r_similar2hit/r_match2base，new=原来没有日志)，old_*列是原来的值
+    improved_flag1：写库时，给原来已有匹配日志、被新日志替换掉的页(不含原来没有日志的页)另外打flag1，如--improved_flag1=202610092035；
+    报告的old_flag1列记下页上原来的flag1值
     """
     import helper as hlp
     from web.tw.match import get_best_match
@@ -786,21 +818,38 @@ def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commi
             row, log = _match_target(job['id'], name, targets[name], ref_txt, vdict, index_id,
                                      job['reference_reels'], force, spans, min_status)
             if log is not None:
+                old = _own_log(page, index_id)
+                better, by = log_improvement(old, log)
+                row['improved_by'] = ','.join(by)
+                if old:
+                    row.update(old_status=old.get('status'), old_r_hit2base=old.get('r_hit2base'),
+                               old_r_similar2hit=old.get('r_similar2hit'), old_r_match2base=old.get('r_match2base'))
+                if only_improved and not better:
+                    row['action'] = 'kept_old'
+                    stats['kept_old'] = stats.get('kept_old', 0) + 1
+                    report.append(row)
+                    continue
                 logs = [l for l in page.get('match_logs') or [] if l.get('index_id') != index_id] + [log]
                 if commit:
                     row['flag'] = status_flag(date_prefix, row.get('page_status_after'))
                     update = {'match_logs': logs, FLAG_FIELD: row['flag']}
                     if set_page_match:
                         update['match'] = get_best_match(logs)
+                    if improved_flag1 not in ('', None) and old:
+                        update['flag1'] = parse_flag_value(improved_flag1)
+                        row.update(old_flag1=page.get('flag1', ''))
                     dbh.page.update_one({'_id': page['_id']}, {'$set': update})
                 row['action'] = 'written' if commit else 'dry_run'
                 stats[log['status']] = stats.get(log['status'], 0) + 1
+                if only_improved:
+                    for n in by:
+                        stats['improved_' + n] = stats.get('improved_' + n, 0) + 1
             report.append(row)
     now = datetime.now().strftime('%Y%m%d-%H%M%S')
     write_csv(path.join(report_dir, 'match_%s-%s.csv' % (direction, now)), report, REPORT_FIELDS)
     write_csv(path.join(report_dir, 'match_%s-%s_by_sutra.csv' % (direction, now)), summarize_sutras(report),
               SUMMARY_FIELDS)
-    logging.info('status distribution (2 no match .. 5 exact): %s' % dict(sorted(stats.items())))
+    logging.info('status distribution (2 no match .. 5 exact): %s' % dict(sorted(stats.items(), key=str)))
 
 
 def run_apply(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', min_status=3, commit=False, overwrite=False,
