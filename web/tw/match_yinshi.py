@@ -14,6 +14,7 @@
     python match_yinshi.py flag_e_undo --report=data/yinshi_match/flag_e-xxx.csv --field=flag1 --value=20260921111 [--commit]   # 按flag_e的报告恢复原值
     python match_yinshi.py plan  [--with_counts]
     python match_yinshi.py match [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--commit [--flag_date=20260921]] [--force] [--only_improved [--improved_flag1=202610092035]] [--set_page_match]
+    python match_yinshi.py debug_match --page=SX_170_1_68 [--reel=SX0346_001] [--db=...]   # 只读，一页的匹配过程全写进txt，用来查为什么匹配不好
     python match_yinshi.py apply [--direction=fz2sx|sx2fz] [--only=FZ0001_010z1] [--min_status=3] [--overwrite] [--commit [--flag_date=20260921]]
 
 两个xlsx被.gitignore忽略，需手工拷到本目录：福州藏vs思溪藏卷编码.xlsx、福州藏音释卷编码.xlsx
@@ -852,6 +853,84 @@ def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commi
     logging.info('status distribution (2 no match .. 5 exact): %s' % dict(sorted(stats.items(), key=str)))
 
 
+def _dump_segments(out, segments, start, end):
+    out.append('  idx  range  match  same  len_diff  base | cmp')
+    for i, g in enumerate(segments):
+        out.append('  %3d  %s  %-5s  %-5s %4s     %r | %r' % (
+            i, 'IN ' if start <= i < end else '   ', g.get('match'), g['is_same'], g['len_diff'], g['base'], g['cmp']))
+
+
+def run_debug_match(page, db='tw-test-readonly', reel='', mapping=MAPPING_XLSX, report_dir=REPORT_DIR, direction=DEFAULT_DIRECTION):
+    """ 只读，查看一页音释为什么匹配不好：用和match完全一样的参数跑一遍，把每一步(取字、参考文本位置、模糊查找窗口、
+    diff的segments、各种参数下的匹配结果、补找)都写进data/yinshi_match/debug_<页名>-<时间>.txt，同时打印。
+    python match_yinshi.py debug_match --page=SX_170_1_68 --db=<库> [--reel=SX0346_001]
+    """
+    import helper as hlp
+    from rapidfuzz import fuzz
+    from util.find_match import fuzzy_find_match, exact_find_match
+    hlp.set_logging('match_yinshi')
+    index_id = DIRECTIONS[direction]['index_id']
+    dbh = hlp.get_db(db)
+    vdict = load_variants()
+    out = []
+    reels = [reel] if reel else find_e_pages(dbh, SX_REEL_REGEX).get(page, [])
+    out.append('page=%s  reels=%s' % (page, reels))
+    _, _, _, jobs = _prepare(dbh, direction, '', mapping)
+    job = next((j for j in jobs if set(reels) & set(j['target_reels'])), None)
+    if not job:
+        out.append('no match job has these reels as target')
+    else:
+        out.append('job=%s  target_reels=%s  reference_reels=%s' % (job['id'], _span(job['target_reels']), job['reference_reels']))
+        targets, _ = collect_yinshi(dbh, job['target_reels'], vdict)
+        t = targets.get(page)
+        ref_txt, ref_counts, spans = build_reference_txt(dbh, job['reference_reels'], vdict)
+        out.append('reference: %s chars, per reel %s' % (len(ref_txt), ref_counts))
+        if not t:
+            out.append('page has no yinshi chars selected in the target reels')
+        else:
+            base_txt, ordered = page_text(t['page'], t['idx'], vdict)
+            out.append('methods=%s  yinshi chars=%s' % (sorted(t['methods']), len(ordered)))
+            out.append('base_txt(%s):\n%s' % (len(base_txt), base_txt))
+            own = _own_log(t['page'], index_id)
+            if own:
+                out.append('stored log: status=%s hit2base=%s similar2hit=%s match2base=%s found_by=%s\n  match_txt=%r' % (
+                    own.get('status'), own.get('r_hit2base'), own.get('r_similar2hit'), own.get('r_match2base'),
+                    own.get('found_by'), own.get('match_txt')))
+            else:
+                out.append('stored log: none')
+            # 参考文本里和这页最像的几页，看真正的对应文本在哪里
+            ranked = sorted(((fuzz.partial_ratio(base_txt, ref_txt[a:b]), a, b, n) for a, b, n, _ in spans if b > a),
+                            reverse=True)[:3]
+            out.append('\nreference pages most similar to the page (partial_ratio):')
+            for score, a, b, n in ranked:
+                out.append('  %s  %s  [%s:%s]\n    %r' % (round(score, 1), n, a, b, ref_txt[a:b]))
+            fuzzy_txt, fuzzy_start = ref_txt, 0
+            if len(ref_txt) > len(base_txt) * 2:
+                fuzzy_txt, score, fuzzy_start = fuzzy_find_match(base_txt, ref_txt)
+                out.append('\nfuzzy window: start=%s len=%s score=%s (page len %s)\n  %r' % (
+                    fuzzy_start, len(fuzzy_txt), score, len(base_txt), fuzzy_txt))
+            else:
+                out.append('\nreference is not longer than 2x the page: no fuzzy window, whole reference used')
+            for label, kw in (('min_same=10 trim_tail', dict(min_same=10, trim_tail=True)),
+                              ('min_same=10 trim_tail + edges', dict(min_same=10, trim_tail=True, edges=True)),
+                              ('min_same=1 trim_tail + edges (retry)', dict(min_same=MIN_SAME_RETRY, trim_tail=True, edges=True))):
+                m, stat, refind_len, segments, a, b, longmis = exact_find_match(base_txt, fuzzy_txt, True, **kw)
+                out.append('\n--- %s: range=[%s,%s) refind_len=%s\n  match_txt=%r' % (label, a, b, refind_len, m))
+                _dump_segments(out, segments, a, b)
+            row, log = _match_target(job['id'], page, t, ref_txt, vdict, index_id, job['reference_reels'], True, spans, 3)
+            out.append('\n=== exactly what match would produce now (force): found_by=%s status=%s hit2base=%s similar2hit=%s '
+                       'leftover=%s note=%s' % (row.get('found_by'), row.get('status'), row.get('r_hit2base'),
+                                                row.get('r_similar2hit'), row.get('leftover_chars'), row.get('note')))
+            out.append('  match_txt=%r' % (log or {}).get('match_txt'))
+    text = '\n'.join(out)
+    print(text)
+    file_path = path.join(report_dir, 'debug_%s-%s.txt' % (page, datetime.now().strftime('%Y%m%d-%H%M%S')))
+    os.makedirs(report_dir, exist_ok=True)
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    logging.info('wrote %s' % file_path)
+
+
 def run_apply(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', min_status=3, commit=False, overwrite=False,
               flag_date=None, mapping=MAPPING_XLSX, report_dir=REPORT_DIR):
     """ 把match_logs里状态>=min_status的匹配文本填入目标音释字的cmp_txt
@@ -1508,6 +1587,6 @@ def run_flag_e_undo(report, field, value, db='tw-test-readonly', commit=False, r
 if __name__ == '__main__':
     import fire
 
-    fire.Fire({'plan': run_plan, 'match': run_match, 'apply': run_apply, 'preview': run_preview, 'flag_e': run_flag_e,
+    fire.Fire({'plan': run_plan, 'match': run_match, 'debug_match': run_debug_match, 'apply': run_apply, 'preview': run_preview, 'flag_e': run_flag_e,
                'flag_e_undo': run_flag_e_undo, 'page_status': run_page_status,
                'yinshi_report': run_yinshi_report})
