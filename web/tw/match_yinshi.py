@@ -600,7 +600,11 @@ def yinshi_match_info(base_txt, match_txt):
     from util.punc import PUNC_STR
     from web.tw.match import get_match_info
     segments = diff(base_txt, match_txt, lambda x: x != '\n', lambda x: x not in f'{PUNC_STR}\n', True, True)
-    return get_match_info(base_txt, match_txt, segments or None)
+    # 命中的范围是第一段到最后一段有匹配文字的segment；两头只有base的部分是没有对应文本的，不算命中
+    with_cmp = [i for i, g in enumerate(segments) if g['cmp']]
+    if not with_cmp:  # 一个匹配的字都没有：没有命中
+        return get_match_info(base_txt, match_txt)
+    return get_match_info(base_txt, match_txt, segments[with_cmp[0]:with_cmp[-1] + 1])
 
 
 def rescue_leftovers(page, t, vdict, index_id, first_match, ref_txt):
