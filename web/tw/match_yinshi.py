@@ -490,7 +490,7 @@ REPORT_FIELDS = ['sutra', 'job', 'reference', 'page', 'method', 'n_chars', 'stat
                  'r_similar2base', 'len_match_txt', 'page_chars', 'page_match_from', 'page_status_before',
                  'page_status_after', 'page_change', 'page_r_hit_before', 'page_r_hit_after', 'page_r_similar_before',
                  'page_r_similar_after', 'found_by', 'leftover_chars', 'source_reels', 'source_pages', 'source_note',
-                 'improved_by', 'old_flag1', 'old_status', 'old_r_hit2base', 'old_r_similar2hit', 'old_r_match2base',
+                 'improved_by', 'old_flag1', 'old_status', 'old_r_hit2base', 'old_r_similar2hit', 'old_r_match2base', 'old_r_similar2base',
                  'applied', 'n_same', 'n_placeholder', 'n_diff', 'action', 'flag', 'note', 'target_txt', 'match_txt']
 SUMMARY_FIELDS = ['sutra', 'jobs', 'empty_jobs', 'reference', 'pages', 'status_5', 'status_4', 'status_3', 'status_2',
                   'no_status', 'leftover_pages', 'page_status_before', 'page_status_after', 'pages_improved',
@@ -765,7 +765,7 @@ def _cmp_changes(page, ordered, proxies):
             if p.get('cmp_txt') and p['cmp_txt'] != page['chars'][i].get('cmp_txt')}
 
 
-LOG_STATS = ('r_hit2base', 'r_similar2hit', 'r_match2base')  # 匹配日志里的三个比率；match2base越接近1越好，其余越大越好
+LOG_STATS = ('r_hit2base', 'r_similar2hit', 'r_match2base', 'r_similar2base')  # 匹配日志里的比率；match2base越接近1越好，其余越大越好
 
 
 def _stat_gain(name, old, new):
@@ -776,17 +776,27 @@ def _stat_gain(name, old, new):
     return round(new - old, 6)
 
 
+def _log_similar2base(log):
+    """ 相似字占音释字的比例；旧日志没有这个字段时用hit2base*similar2hit还原"""
+    if log.get('r_similar2base') is not None:
+        return log['r_similar2base']
+    return (log.get('r_hit2base') or 0) * (log.get('r_similar2hit') or 0)
+
+
 def log_improvement(old, new):
     """ 新旧匹配日志比较，返回(是否变好, 变好的指标名列表)
-    变好：状态升高；或状态相同，三个比率里至少一个变好且没有一个变差。没有旧日志算变好(new)
+    变好：状态升高；或状态相同而r_similar2base(相似字占音释字的比例)升高。状态降低一律不算变好。没有旧日志算变好(new)
+    hit2base和similar2hit此消彼长(多命中的字会拉低similar2hit)，所以不要求每个比率都不变差
     """
     if not old:
         return True, ['new']
-    gains = {n: _stat_gain(n, old, new) for n in LOG_STATS}
-    better = [n for n, g in gains.items() if g > 0]
-    if (new.get('status') or 0) > (old.get('status') or 0):
+    old = dict(old, r_similar2base=_log_similar2base(old))
+    new = dict(new, r_similar2base=_log_similar2base(new))
+    better = [n for n in LOG_STATS if _stat_gain(n, old, new) > 0]
+    new_status, old_status = new.get('status') or 0, old.get('status') or 0
+    if new_status > old_status:
         return True, ['status'] + better
-    if (new.get('status') or 0) == (old.get('status') or 0) and better and not any(g < 0 for g in gains.values()):
+    if new_status == old_status and 'r_similar2base' in better:
         return True, better
     return False, better
 
@@ -840,7 +850,8 @@ def run_match(direction=DEFAULT_DIRECTION, db='tw-test-readonly', only='', commi
                 row['improved_by'] = ','.join(by)
                 if old:
                     row.update(old_status=old.get('status'), old_r_hit2base=old.get('r_hit2base'),
-                               old_r_similar2hit=old.get('r_similar2hit'), old_r_match2base=old.get('r_match2base'))
+                               old_r_similar2hit=old.get('r_similar2hit'), old_r_match2base=old.get('r_match2base'),
+                               old_r_similar2base=_log_similar2base(old))
                 if only_improved and not better:
                     row['action'] = 'kept_old'
                     stats['kept_old'] = stats.get('kept_old', 0) + 1
