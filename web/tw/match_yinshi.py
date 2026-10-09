@@ -46,6 +46,11 @@ EMPTY_REEL_TYPES = ('空卷', '音释（缺）')
 # find_best_match默认要求至少10字的连续同文才算匹配。音释常常很短，所以默认没找到匹配的页，再不限同文长度(MIN_SAME_RETRY)找一次；
 # 两次都去掉匹配文本末尾多出来的字(trim_tail)。是否算匹配由get_match_info按平台的规则(命中率、相似率)算出状态
 MIN_SAME_RETRY = 1
+
+
+def window_pad(base_txt):
+    """ 模糊查找窗口前后多取的字数：约半页长，至少10字(模糊查找的步长就是半页长)"""
+    return max(10, len(base_txt) // 2)
 # 首次匹配只认顺序一致的最长一段；同一页里两块文字前后颠倒时，另一块会被留下，因此再单独找一次
 LEFTOVER_MIN_LEN = 10  # 连续没有对应文本的字数不少于该值才单独再找
 LEFTOVER_MAX_TRIES = 30  # 每页补找时最多调用几次查找
@@ -702,9 +707,10 @@ def _match_target(job_id, name, t, ref_txt, vdict, index_id, reference_reels, fo
     if own and own.get('status') == 5 and not force:
         return dict(row, action='skipped_done', status=5), None
     try:
-        match_txt, by = find_best_match(base_txt, ref_txt, trim_tail=True, edges=True)[0], 'find_best_match'
+        match_txt, by = find_best_match(base_txt, ref_txt, trim_tail=True, edges=True, pad=window_pad(base_txt))[0], 'find_best_match'
         if not match_txt.strip():  # 没有10字以上的连续同文：不限同文长度再找一次，任何字数的页都一样
-            match_txt = find_best_match(base_txt, ref_txt, min_same=MIN_SAME_RETRY, trim_tail=True, edges=True)[0]
+            match_txt = find_best_match(base_txt, ref_txt, min_same=MIN_SAME_RETRY, trim_tail=True, edges=True,
+                                       pad=window_pad(base_txt))[0]
             by = 'min_same_retry' if match_txt.strip() else by  # 还是没找到就不标记
         pieces, leftover = [match_txt], 0  # pieces：匹配文本由参考文本里哪几段拼成，用于查来源页
         if by == 'find_best_match' and match_txt.strip():
@@ -934,8 +940,10 @@ def run_debug_match(page, db='tw-test-readonly', reel='', mapping=MAPPING_XLSX, 
             fuzzy_txt, fuzzy_start = ref_txt, 0
             if len(ref_txt) > len(base_txt) * 2:
                 fuzzy_txt, score, fuzzy_start = fuzzy_find_match(base_txt, ref_txt)
-                out.append('\nfuzzy window: start=%s len=%s score=%s (page len %s)\n  %r' % (
-                    fuzzy_start, len(fuzzy_txt), score, len(base_txt), fuzzy_txt))
+                pad = window_pad(base_txt)
+                fuzzy_txt = ref_txt[max(0, fuzzy_start - pad):fuzzy_start + len(fuzzy_txt) + pad]
+                out.append('\nfuzzy window (+%s chars each side): start=%s len=%s score=%s (page len %s)\n  %r' % (
+                    pad, fuzzy_start, len(fuzzy_txt), score, len(base_txt), fuzzy_txt))
             else:
                 out.append('\nreference is not longer than 2x the page: no fuzzy window, whole reference used')
             for label, kw in (('min_same=10 trim_tail', dict(min_same=10, trim_tail=True)),

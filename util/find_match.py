@@ -290,8 +290,12 @@ def fuzzy_find_match(txt1, txt2, max_steps=10000, long_cut=True):
     return match_segment, best_score, start
 
 
-def find_best_match(txt1, txt2, refinded=True, min_same=10, trim_tail=False, edges=False):
-    """ 从txt2中找到与txt1最匹配的文本。min_same、trim_tail、edges见check_match"""
+def find_best_match(txt1, txt2, refinded=True, min_same=10, trim_tail=False, edges=False, pad=0):
+    """ 从txt2中找到与txt1最匹配的文本。min_same、trim_tail、edges见check_match
+    pad：模糊查找得到的窗口前后各多取这么多字再精确查找。窗口按固定步长切分，比较相似度时附近文本里的常见字会让
+        偏后几个字的窗口得分更高，目标文本开头(或结尾)几个字被切到窗口外就再也找不到；多取一些就能补回，
+        多出来的无关文本由check_match裁掉
+    """
     if not txt2:
         return '', {'base': {'match_ratio': 0}}, False, []
 
@@ -299,6 +303,8 @@ def find_best_match(txt1, txt2, refinded=True, min_same=10, trim_tail=False, edg
     # txt2的长度 > txt1的2倍时，先进行模糊查找
     if len(txt2) > len(txt1) * 2:
         fuzzy_txt, score, start = fuzzy_find_match(txt1, txt2)
+        if pad:
+            fuzzy_txt = txt2[max(0, start - pad):start + len(fuzzy_txt) + pad]
     # 精确查找匹配的文本段
     # exact_find_match会回调find_best_match
     # 要用到find_best_match返回值的match_txt, long_mismatch_segs
