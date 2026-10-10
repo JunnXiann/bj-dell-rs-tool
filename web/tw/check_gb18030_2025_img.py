@@ -10,6 +10,7 @@ python3 web/tw/check_gb18030_2025_img.py --apply
 """
 import os
 import sys
+import pymongo
 from os import path as osp
 
 BASE_DIR = osp.dirname(osp.dirname(osp.dirname(osp.abspath(__file__))))
@@ -17,6 +18,7 @@ sys.path.append(BASE_DIR)
 import helper as hp
 
 FIELD = 'b_gb18030_2025'
+CODE_FIELD = 'gb18030_2025'
 
 
 def check(db, coll, img_dir, apply):
@@ -47,10 +49,31 @@ def check(db, coll, img_dir, apply):
             print(f'[{coll}] set {FIELD}={value}: {r.modified_count} docs')
 
 
+def sync_code(db, src='gbhan', dst='unicode', apply=False):
+    """ 以 gbhan 为准，把 gb18030_2025 值按 unicode 补到 unicode 表（仅补缺失的，不覆盖已有值）"""
+    src_map = {d['unicode']: d[CODE_FIELD] for d in db[src].find(
+        {CODE_FIELD: {'$nin': [None, '']}}, {'unicode': 1, CODE_FIELD: 1}) if d.get('unicode')}
+    ops = []
+    for doc in db[dst].find({'$or': [{CODE_FIELD: {'$exists': False}}, {CODE_FIELD: {'$in': [None, '']}}]},
+                            {'unicode': 1}):
+        code = src_map.get(doc.get('unicode'))
+        if code:
+            ops.append(pymongo.UpdateOne({'_id': doc['_id']}, {'$set': {CODE_FIELD: code}}))
+    print(f'[{dst}] {CODE_FIELD}: {len(src_map)} values in {src}, to fill in {dst}: {len(ops)}')
+    if not apply:
+        if ops:
+            print(f'[{dst}] dry run, nothing written (use --apply)')
+        return
+    if ops:
+        r = db[dst].bulk_write(ops, ordered=False)
+        print(f'[{dst}] filled {CODE_FIELD}: {r.modified_count} docs')
+
+
 def main(colls='unicode,gbhan', img_dir='/nas/web-static/tw-aux/fonts/gb18030_2025', apply=False):
     db = hp.get_db('tw-aux')
     if isinstance(colls, str):
         colls = colls.split(',')
+    sync_code(db, apply=apply)
     for coll in colls:
         check(db, coll, img_dir, apply)
 
